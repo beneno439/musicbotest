@@ -7,14 +7,15 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "postinstall": "node scripts/install-yt-dlp.cjs"
   },
   "dependencies": {
     "@grammyjs/parse-mode": "github:grammyjs/parse-mode",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",
     "youtube-search-api": "^1.2.0",
-    "yt-dlp-exec": "^1.0.2"
+    "yt-dlp-wrap": "^2.3.12"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

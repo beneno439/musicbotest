@@ -1,5 +1,5 @@
 import { GetListByKeyword, SearchResult } from "youtube-search-api";
-import ytdlp from "yt-dlp-exec";
+import YTDlpWrap from "yt-dlp-wrap";
 import { createReadStream } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -22,6 +22,12 @@ export interface Track {
 
 const cache = new Map<string, Track>();
 const blockedVideoIds = new Set<string>();
+const bundledYtDlp = join(
+  process.cwd(),
+  "bin",
+  process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp",
+);
+const ytdlp = new YTDlpWrap(process.env.YT_DLP_PATH || bundledYtDlp);
 
 export function blockList(videoId: string): boolean {
   return blockedVideoIds.has(videoId);
@@ -101,23 +107,24 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
 
   const directory = await mkdtemp(join(tmpdir(), "music-bot-"));
   const outputPath = join(directory, `${videoId}.mp3`);
-  const flags: Record<string, string | boolean> = {
-    format: "bestaudio/best",
-    extractAudio: true,
-    audioFormat: "mp3",
-    audioQuality: "0",
-    output: outputPath,
-    noPlaylist: true,
-    noPart: true,
-    quiet: true,
-  };
-  const cookiesFile = process.env.YOUTUBE_COOKIES_JSON;
+  const args = [
+    `https://www.youtube.com/watch?v=${videoId}`,
+    "--format", "bestaudio/best",
+    "--extract-audio",
+    "--audio-format", "mp3",
+    "--audio-quality", "0",
+    "--output", outputPath,
+    "--no-playlist",
+    "--no-part",
+    "--quiet",
+  ];
+  const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
   const proxy = process.env.YOUTUBE_PROXY;
-  if (cookiesFile) flags.cookies = cookiesFile;
-  if (proxy) flags.proxy = proxy;
+  if (cookiesFile) args.push("--cookies", cookiesFile);
+  if (proxy) args.push("--proxy", proxy);
 
   try {
-    await ytdlp(`https://www.youtube.com/watch?v=${videoId}`, flags);
+    await ytdlp.execPromise(args);
     const audio = createReadStream(outputPath);
     const cleanup = () => {
       void rm(directory, { recursive: true, force: true });

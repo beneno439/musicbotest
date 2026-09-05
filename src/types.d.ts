@@ -17,17 +17,9 @@ declare module "youtube-search-api" {
   ): Promise<{ items?: SearchResult[]; nextPage?: string }>;
 }
 
-declare module "yt-dlp-exec" {
-  type YtDlpFlags = Record<string, string | boolean | number>;
-  type YtDlpOptions = {
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  };
-
-  interface YtDlp {
-    (url: string, flags?: YtDlpFlags, options?: YtDlpOptions): Promise<unknown>;
+declare module "yt-dlp-wrap" {
+  export default class YTDlpWrap {
+    constructor(binaryPath?: string);
+    execPromise(args: string[]): Promise<string>;
   }
-
-  const ytdlp: YtDlp;
-  export default ytdlp;
 }
