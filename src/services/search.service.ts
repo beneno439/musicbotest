@@ -37,6 +37,16 @@ function youtubeOptions(): Parameters<typeof ytdl.getInfo>[1] {
     } catch (error) {
       console.error("YOUTUBE_COOKIES_JSON is invalid:", error);
     }
+  } else {
+    // "Sign in to confirm you're not a bot" cannot be solved by retrying —
+    // it requires a real logged-in session. Surface this once, loudly.
+    console.warn(
+      "YOUTUBE_COOKIES_JSON is not set. YouTube will likely block audio " +
+        "downloads with 'Sign in to confirm you're not a bot', especially " +
+        "from datacenter IPs. Export cookies from a logged-in browser " +
+        "session (Netscape/JSON format compatible with @distube/ytdl-core's " +
+        "createAgent) and set them in this env var to fix it.",
+    );
   }
 
   const proxy = process.env.YOUTUBE_PROXY;
@@ -44,6 +54,14 @@ function youtubeOptions(): Parameters<typeof ytdl.getInfo>[1] {
     options.agent = ytdl.createProxyAgent({ uri: proxy });
   }
   return options;
+}
+
+function isUnrecoverable(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "UnrecoverableError" ||
+      /sign in to confirm/i.test(error.message))
+  );
 }
 
 async function getInfoWithRetry(videoId: string) {
@@ -59,6 +77,11 @@ async function getInfoWithRetry(videoId: string) {
       });
     } catch (error) {
       lastError = error;
+      // Bot-check failures won't go away by trying another player client
+      // without valid cookies/proxy — stop burning time and fail fast.
+      if (isUnrecoverable(error)) {
+        throw error;
+      }
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
   }
@@ -149,8 +172,9 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
 
 /**
  * Retries an async operation with exponential backoff.
- * Useful for ytdl-core / YouTube 429 (Too Many Requests) errors,
- * which are usually transient throttling rather than permanent failures.
+ * Useful for transient 429 (Too Many Requests) errors.
+ * Does NOT retry "Sign in to confirm you're not a bot" (UnrecoverableError) —
+ * that needs valid cookies/proxy, not more attempts.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -175,7 +199,6 @@ export async function withRetry<T>(
       if (attempt === retries || !isRetryable(error)) {
         throw error;
       }
-      // Exponential backoff with jitter: 1s, 2s, 4s... + up to 300ms random
       const delay = baseDelayMs * 2 ** attempt + Math.random() * 300;
       console.warn(
         `Retryable error on attempt ${attempt + 1}/${retries + 1}, retrying in ${Math.round(delay)}ms:`,
@@ -188,6 +211,7 @@ export async function withRetry<T>(
 }
 
 function defaultIsRetryable(error: unknown): boolean {
+  if (isUnrecoverable(error)) return false;
   const message = error instanceof Error ? error.message : String(error);
   const statusCode =
     error instanceof Error && "statusCode" in error

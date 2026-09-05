@@ -26,26 +26,9 @@ if (!token || token === "YOUR_TELEGRAM_BOT_TOKEN") {
 const bot = new Bot(token);
 bot.use(errorMiddleware);
 
-const LEGAL_TEXT = `Legal Information
+const LEGAL_TEXT = `1`;
 
-What this service does
-This bot searches media that is publicly accessible on third-party platforms and delivers results only in the chat where they were requested. It does not operate a public catalogue or publish files. Files are fetched on demand.
-
-Copyright complaints
-Send a valid notice to the bot owner with the subject "Copyright notice". Include identification of the work, the exact result or URL, your contact details, a good-faith statement, an accuracy statement, and your signature. Validly identified material is removed from the cache and blocked from further retrieval.
-
-Counter-notice
-If material was blocked by mistake, provide its identification, an explanation, your contact details, and your signature. We will review the request.
-
-Your responsibility
-You are responsible for complying with the law, the terms of source platforms, and applicable licences. The service is provided "as is" and does not encourage copyright infringement.
-
-Last updated: 5 September 2026`;
-
-const ADS = [
-  "Учитесь, общаясь со своим любимым блогером, и получайте шанс выиграть Яндекс Станцию с Алисой, Яндекс Дропс или мерч в боте Яндекс Образования. 👉 Перейти в бот: https://clck.adlean.pro/",
-  "⚡️🎧 YouTube Music теперь бесплатно в Telegram-боте! Слушай и добавляй песни в профиль: https://t.me/VoiceShazamBot",
-];
+const ADS = ["12"];
 
 function botUsername(): string {
   return (process.env.BOT_USERNAME || "YourMusicSearchBot").replace(/^@/, "");
