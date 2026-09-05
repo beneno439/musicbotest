@@ -25,6 +25,7 @@ export async function getAlternativeLinks(
   try {
     const response = await fetch(
       `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(youtubeUrl)}`,
+      { headers: { Accept: "application/json" } },
     );
     if (!response.ok) throw new Error(`song.link API ${response.status}`);
     const data = (await response.json()) as SongLinkResponse;

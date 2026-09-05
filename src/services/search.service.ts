@@ -1,5 +1,5 @@
 import { GetListByKeyword, SearchResult } from "youtube-search-api";
-import ytdl from "ytdl-core";
+import ytdl from "@distube/ytdl-core";
 import { Readable } from "node:stream";
 import {
   canReadVideoInfo,

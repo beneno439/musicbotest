@@ -86,12 +86,22 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
     reply_markup: keyboard,
   });
 
-  const audio = getAudioStream(track.videoId);
-  await ctx.replyWithAudio(new InputFile(audio, `${track.artist} - ${track.title}.mp3`), {
-    title: track.title,
-    performer: track.artist,
-    caption: `🎵 ${track.title} — ${track.artist}`,
-  });
+  try {
+    const audio = getAudioStream(track.videoId);
+    await ctx.replyWithAudio(
+      new InputFile(audio, `${track.artist} - ${track.title}.mp3`),
+      {
+        title: track.title,
+        performer: track.artist,
+        caption: `🎵 ${track.title} — ${track.artist}`,
+      },
+    );
+  } catch (error) {
+    console.error(`Audio upload failed for ${track.videoId}:`, error);
+    await ctx.reply(
+      "⚠️ Аудио временно недоступно, но ссылки на прослушивание работают.",
+    );
+  }
 }
 
 async function fetchLyrics(query: string): Promise<string | null> {
