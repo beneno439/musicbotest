@@ -73,14 +73,13 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   });
 
   try {
-    // YouTube throttles ytdl-core aggressively (429s), especially from
-    // datacenter IPs. Retry with backoff before giving up.
+    // Keep retries for transient yt-dlp/network failures.
     const audio = await withRetry(() => getAudioStream(track.videoId), {
       retries: 3,
       baseDelayMs: 1500,
     });
     await ctx.replyWithAudio(
-      new InputFile(audio, `${track.artist} - ${track.title}.m4a`),
+      new InputFile(audio, `${track.artist} - ${track.title}.mp3`),
       {
         title: track.title,
         performer: track.artist,
@@ -90,8 +89,8 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   } catch (error) {
     console.error(`Audio upload failed for ${track.videoId}:`, error);
     await ctx.reply(
-      "⚠️ Полное аудио сейчас недоступно: YouTube ограничил загрузку для сервера. " +
-        "Добавьте YOUTUBE_COOKIES_JSON или YOUTUBE_PROXY и попробуйте снова.",
+      "⚠️ Полное аудио сейчас недоступно. Проверьте, что на сервере установлены " +
+        "yt-dlp и ffmpeg, затем попробуйте снова.",
     );
   }
 }

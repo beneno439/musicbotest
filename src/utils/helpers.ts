@@ -1,5 +1,3 @@
-import ytdl from "@distube/ytdl-core";
-
 const YOUTUBE_ID = /^[\w-]{11}$/;
 
 export function extractYouTubeId(text: string): string | null {
@@ -55,7 +53,7 @@ export function getThumbnail(
 }
 
 export function canReadVideoInfo(videoId: string): boolean {
-  return ytdl.validateID(videoId);
+  return YOUTUBE_ID.test(videoId);
 }
 
 export function geniusSearchUrl(title: string, artist: string): string {

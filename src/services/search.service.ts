@@ -1,6 +1,10 @@
 import { GetListByKeyword, SearchResult } from "youtube-search-api";
-import ytdl from "@distube/ytdl-core";
-import { Readable } from "node:stream";
+import ytdlp from "yt-dlp-exec";
+import { createReadStream } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Readable } from "node:stream";
 import {
   canReadVideoInfo,
   getThumbnail,
@@ -18,80 +22,6 @@ export interface Track {
 
 const cache = new Map<string, Track>();
 const blockedVideoIds = new Set<string>();
-
-function youtubeOptions(): Parameters<typeof ytdl.getInfo>[1] {
-  const options: Parameters<typeof ytdl.getInfo>[1] = {
-    playerClients: ["WEB_EMBEDDED", "IOS", "ANDROID", "TV"],
-    requestOptions: {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
-      },
-    },
-  };
-
-  const cookies = process.env.YOUTUBE_COOKIES_JSON;
-  if (cookies) {
-    try {
-      const parsedCookies =
-        typeof cookies === "string" ? JSON.parse(cookies) : cookies;
-      if (!Array.isArray(parsedCookies)) {
-        throw new Error("Cookies must be a JSON array.");
-      }
-      options.agent = ytdl.createAgent(parsedCookies);
-    } catch (error) {
-      console.error("YOUTUBE_COOKIES_JSON is invalid:", error);
-    }
-  } else {
-    // "Sign in to confirm you're not a bot" cannot be solved by retrying —
-    // it requires a real logged-in session. Surface this once, loudly.
-    console.warn(
-      "YOUTUBE_COOKIES_JSON is not set. YouTube will likely block audio " +
-        "downloads with 'Sign in to confirm you're not a bot', especially " +
-        "from datacenter IPs. Export cookies from a logged-in browser " +
-        "session (Netscape/JSON format compatible with @distube/ytdl-core's " +
-        "createAgent) and set them in this env var to fix it.",
-    );
-  }
-
-  const proxy = process.env.YOUTUBE_PROXY;
-  if (proxy) {
-    options.agent = ytdl.createProxyAgent({ uri: proxy });
-  }
-  return options;
-}
-
-function isUnrecoverable(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.name === "UnrecoverableError" ||
-      /sign in to confirm/i.test(error.message))
-  );
-}
-
-async function getInfoWithRetry(videoId: string) {
-  let lastError: unknown;
-  for (const playerClients of [
-    ["WEB_EMBEDDED", "IOS", "ANDROID", "TV"] as const,
-    ["WEB", "ANDROID", "IOS"] as const,
-  ]) {
-    try {
-      return await ytdl.getInfo(videoId, {
-        ...youtubeOptions(),
-        playerClients: [...playerClients],
-      });
-    } catch (error) {
-      lastError = error;
-      // Bot-check failures won't go away by trying another player client
-      // without valid cookies/proxy — stop burning time and fail fast.
-      if (isUnrecoverable(error)) {
-        throw error;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 750));
-    }
-  }
-  throw lastError;
-}
 
 export function blockList(videoId: string): boolean {
   return blockedVideoIds.has(videoId);
@@ -126,14 +56,6 @@ export async function getTrackByVideoId(
 
   let title = videoId;
   let artist = "YouTube";
-  try {
-    const info = await getInfoWithRetry(videoId);
-    title = info.videoDetails.title;
-    artist = info.videoDetails.author.name || artist;
-  } catch {
-    // Metadata can be unavailable for age-restricted/deleted videos.
-  }
-
   const track: Track = {
     videoId,
     title,
@@ -176,19 +98,43 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   if (!canReadVideoInfo(videoId) || blockList(videoId)) {
     throw new Error("The requested video cannot be downloaded.");
   }
-  const info = await getInfoWithRetry(videoId);
-  return ytdl.downloadFromInfo(info, {
-    ...youtubeOptions(),
-    quality: "highestaudio",
-    filter: "audioonly",
-  });
+
+  const directory = await mkdtemp(join(tmpdir(), "music-bot-"));
+  const outputPath = join(directory, `${videoId}.mp3`);
+  const flags: Record<string, string | boolean> = {
+    format: "bestaudio/best",
+    extractAudio: true,
+    audioFormat: "mp3",
+    audioQuality: "0",
+    output: outputPath,
+    noPlaylist: true,
+    noPart: true,
+    quiet: true,
+  };
+  const cookiesFile = process.env.YOUTUBE_COOKIES_JSON;
+  const proxy = process.env.YOUTUBE_PROXY;
+  if (cookiesFile) flags.cookies = cookiesFile;
+  if (proxy) flags.proxy = proxy;
+
+  try {
+    await ytdlp(`https://www.youtube.com/watch?v=${videoId}`, flags);
+    const audio = createReadStream(outputPath);
+    const cleanup = () => {
+      void rm(directory, { recursive: true, force: true });
+    };
+    audio.once("close", cleanup);
+    audio.once("error", cleanup);
+    return audio;
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /**
  * Retries an async operation with exponential backoff.
  * Useful for transient 429 (Too Many Requests) errors.
- * Does NOT retry "Sign in to confirm you're not a bot" (UnrecoverableError) —
- * that needs valid cookies/proxy, not more attempts.
+ * yt-dlp errors that are not transient are returned immediately.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
@@ -225,7 +171,6 @@ export async function withRetry<T>(
 }
 
 function defaultIsRetryable(error: unknown): boolean {
-  if (isUnrecoverable(error)) return false;
   const message = error instanceof Error ? error.message : String(error);
   const statusCode =
     error instanceof Error && "statusCode" in error

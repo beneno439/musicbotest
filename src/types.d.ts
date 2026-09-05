@@ -16,3 +16,18 @@ declare module "youtube-search-api" {
     options?: Array<{ type: "video" | "channel" | "playlist" | "movie" }>
   ): Promise<{ items?: SearchResult[]; nextPage?: string }>;
 }
+
+declare module "yt-dlp-exec" {
+  type YtDlpFlags = Record<string, string | boolean | number>;
+  type YtDlpOptions = {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+  };
+
+  interface YtDlp {
+    (url: string, flags?: YtDlpFlags, options?: YtDlpOptions): Promise<unknown>;
+  }
+
+  const ytdlp: YtDlp;
+  export default ytdlp;
+}

@@ -10,11 +10,11 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
     "@grammyjs/parse-mode": "github:grammyjs/parse-mode",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",
-    "youtube-search-api": "^1.2.0"
+    "youtube-search-api": "^1.2.0",
+    "yt-dlp-exec": "^1.0.2"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
