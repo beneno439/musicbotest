@@ -89,8 +89,7 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   } catch (error) {
     console.error(`Audio upload failed for ${track.videoId}:`, error);
     await ctx.reply(
-      "⚠️ Полное аудио сейчас недоступно. Проверьте, что на сервере установлены " +
-        "yt-dlp и ffmpeg, затем попробуйте снова.",
+      "⚠️ Не удалось загрузить полное аудио. Попробуйте выбрать другую версию песни.",
     );
   }
 }

@@ -22,4 +22,9 @@ declare module "yt-dlp-wrap" {
     constructor(binaryPath?: string);
     execPromise(args: string[]): Promise<string>;
   }
+
+  declare module "ffmpeg-static" {
+    const ffmpegPath: string | null;
+    export default ffmpegPath;
+  }
 }

@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
+import ffmpegPath from "ffmpeg-static";
 import {
   canReadVideoInfo,
   getThumbnail,
@@ -122,6 +123,7 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   const proxy = process.env.YOUTUBE_PROXY;
   if (cookiesFile) args.push("--cookies", cookiesFile);
   if (proxy) args.push("--proxy", proxy);
+  if (ffmpegPath) args.push("--ffmpeg-location", ffmpegPath);
 
   try {
     await ytdlp.execPromise(args);
