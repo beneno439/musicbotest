@@ -15,6 +15,7 @@ import {
   isYouTubeUrl,
 } from "./utils/helpers.js";
 import { getAlbumInfo } from "./services/itunes.service.js";
+import { findLyrics } from "./services/lyrics.service.js";
 
 const token = process.env.BOT_TOKEN;
 if (!token || token === "YOUR_TELEGRAM_BOT_TOKEN") {
@@ -59,7 +60,7 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
 
   const [album, links] = await Promise.all([
     getAlbumInfo(track.title, track.artist),
-    getAlternativeLinks(track.watchUrl),
+    getAlternativeLinks(track.watchUrl, `${track.artist} ${track.title}`),
   ]);
   const photo = album?.artworkUrl ?? track.thumbnail;
   const albumLine = album?.albumName
@@ -71,9 +72,10 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
     .url("▶️ YouTube", links.youtube)
     .url("🎧 Song.link", links.songLink)
     .row();
-  if (links.spotify) {
-    keyboard.url("🟢 Spotify", links.spotify).row();
-  }
+  keyboard
+    .url("🎶 YouTube Music", links.youtubeMusic)
+    .url("🟢 Spotify", links.spotify)
+    .row();
   keyboard
     .url("📝 Открыть текст", geniusSearchUrl(track.title, track.artist))
     .text("📨 Отправить текст", `lyrics:${track.videoId}`)
@@ -87,9 +89,9 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   });
 
   try {
-    const audio = getAudioStream(track.videoId);
+    const audio = await getAudioStream(track.videoId);
     await ctx.replyWithAudio(
-      new InputFile(audio, `${track.artist} - ${track.title}.mp3`),
+      new InputFile(audio, `${track.artist} - ${track.title}.m4a`),
       {
         title: track.title,
         performer: track.artist,
@@ -104,20 +106,6 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   }
 }
 
-async function fetchLyrics(query: string): Promise<string | null> {
-  const parts = query
-    .split(/\s+[–—-]\s+|,\s*/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length < 2) return null;
-  const response = await fetch(
-    `https://api.lyrics.ovh/v1/${encodeURIComponent(parts[0])}/${encodeURIComponent(parts[1])}`,
-  );
-  if (!response.ok) return null;
-  const data = (await response.json()) as { lyrics?: string };
-  return data.lyrics || null;
-}
-
 bot.callbackQuery(/^lyrics:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   const videoId = ctx.match[1];
@@ -127,16 +115,17 @@ bot.callbackQuery(/^lyrics:(.+)$/, async (ctx) => {
     return;
   }
 
-  const lyrics = await fetchLyrics(`${track.artist} - ${track.title}`);
+  const lyrics = await findLyrics(track.title, track.artist);
   if (!lyrics) {
     await ctx.reply(
       `Текст не найден. Попробуйте открыть Genius:\n${geniusSearchUrl(track.title, track.artist)}`,
     );
     return;
   }
-  await ctx.reply(
-    `📝 ${track.title} — ${track.artist}\n\n${lyrics}`,
-  );
+  const text = `📝 ${track.title} — ${track.artist}\n\n${lyrics}`;
+  for (let offset = 0; offset < text.length; offset += 3900) {
+    await ctx.reply(text.slice(offset, offset + 3900));
+  }
 });
 
 bot.command("start", async (ctx) => {

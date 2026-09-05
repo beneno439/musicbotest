@@ -89,11 +89,12 @@ export async function searchTrack(query: string): Promise<Track | null> {
   return null;
 }
 
-export function getAudioStream(videoId: string): Readable {
+export async function getAudioStream(videoId: string): Promise<Readable> {
   if (!canReadVideoInfo(videoId) || blockList(videoId)) {
     throw new Error("The requested video cannot be downloaded.");
   }
-  return ytdl(videoId, {
+  const info = await ytdl.getInfo(videoId);
+  return ytdl.downloadFromInfo(info, {
     quality: "highestaudio",
     filter: "audioonly",
   });
