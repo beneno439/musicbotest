@@ -4,7 +4,7 @@ import { errorMiddleware } from "./middlewares/error.middleware.js";
 import {
   getTrackByVideoId,
   getAudioStream,
-  searchTrack,
+  searchTracks,
   Track,
   withRetry,
 } from "./services/search.service.js";
@@ -116,6 +116,16 @@ bot.callbackQuery(/^lyrics:(.+)$/, async (ctx) => {
   }
 });
 
+bot.callbackQuery(/^track:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery("Загружаю выбранную песню...");
+  const track = await getTrackByVideoId(ctx.match[1]);
+  if (!track) {
+    await ctx.reply("⚠️ Не удалось найти выбранную песню заново.");
+    return;
+  }
+  await sendTrack(ctx, track);
+});
+
 bot.command("start", async (ctx) => {
   await ctx.reply(
     "👋 Привет!\nЯ помогу найти музыку 🎶, отправь мне что-то из этого:\n\n" +
@@ -133,9 +143,22 @@ bot.on("message:text", async (ctx) => {
   const videoId = isYouTubeUrl(text) ? extractYouTubeId(text) : null;
   let track: Track | null = null;
   try {
-    track = videoId
-      ? await getTrackByVideoId(videoId)
-      : await searchTrack(text);
+    if (videoId) {
+      track = await getTrackByVideoId(videoId);
+    } else {
+      const tracks = await searchTracks(text);
+      if (tracks.length === 0) {
+        await ctx.reply("🔍 Ничего не найдено. Попробуйте уточнить название.");
+        return;
+      }
+      const keyboard = new InlineKeyboard();
+      for (const [index, result] of tracks.entries()) {
+        const label = `${index + 1}. ${result.title}`.slice(0, 60);
+        keyboard.text(label, `track:${result.videoId}`).row();
+      }
+      await ctx.reply("🎵 Выберите песню:", { reply_markup: keyboard });
+      return;
+    }
   } catch (error) {
     console.error("Music search failed:", error);
     await ctx.reply(
@@ -148,11 +171,6 @@ bot.on("message:text", async (ctx) => {
     return;
   }
   await sendTrack(ctx, track);
-});
-
-bot.on("message", async (ctx) => {
-  await ctx.reply("🔍");
-  // await sendAd(ctx);
 });
 
 bot.catch((error) => console.error("Fatal update error:", error));

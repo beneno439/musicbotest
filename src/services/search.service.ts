@@ -141,21 +141,36 @@ export async function getTrackByVideoId(
 }
 
 export async function searchTrack(query: string): Promise<Track | null> {
+  const tracks = await searchTracks(query, 1);
+  return tracks[0] ?? null;
+}
+
+export async function searchTracks(
+  query: string,
+  limit = 6,
+): Promise<Track[]> {
   const key = `q:${normalizeQuery(query)}`;
   const cached = cache.get(key);
-  if (cached) return cached;
+  if (cached) return [cached];
 
   // youtube-search-api expects a boolean, result limit, and an options array.
-  const result = await GetListByKeyword(query, false, 10, [{ type: "video" }]);
+  const result = await GetListByKeyword(
+    query,
+    false,
+    Math.max(limit, 1),
+    [{ type: "video" }],
+  );
+  const tracks: Track[] = [];
   for (const item of result.items ?? []) {
     const track = toTrack(item);
     if (track) {
-      cache.set(key, track);
       cache.set(`id:${track.videoId}`, track);
-      return track;
+      tracks.push(track);
+      if (tracks.length >= limit) break;
     }
   }
-  return null;
+  if (tracks.length > 0) cache.set(key, tracks[0]);
+  return tracks;
 }
 
 export async function getAudioStream(videoId: string): Promise<Readable> {
