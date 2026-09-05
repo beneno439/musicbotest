@@ -6,6 +6,7 @@ import {
   getAudioStream,
   searchTrack,
   Track,
+  withRetry,
 } from "./services/search.service.js";
 import { getAlternativeLinks } from "./services/links.service.js";
 import {
@@ -89,36 +90,27 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   });
 
   try {
-    let lastError: unknown;
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
-      try {
-        const audio = await getAudioStream(track.videoId);
-        await ctx.replyWithAudio(
-          new InputFile(audio, `${track.artist} - ${track.title}.m4a`),
-          {
-            title: track.title,
-            performer: track.artist,
-            caption: `🎵 ${track.title} — ${track.artist}`,
-          },
-        );
-        lastError = undefined;
-        break;
-      } catch (error) {
-        lastError = error;
-        if (attempt < 2) {
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-      }
-    }
-    if (lastError) throw lastError;
+    // YouTube throttles ytdl-core aggressively (429s), especially from
+    // datacenter IPs. Retry with backoff before giving up.
+    const audio = await withRetry(() => getAudioStream(track.videoId), {
+      retries: 3,
+      baseDelayMs: 1500,
+    });
+    await ctx.replyWithAudio(
+      new InputFile(audio, `${track.artist} - ${track.title}.m4a`),
+      {
+        title: track.title,
+        performer: track.artist,
+        caption: `🎵 ${track.title} — ${track.artist}`,
+      },
+    );
   } catch (error) {
     console.error(`Audio upload failed for ${track.videoId}:`, error);
     await ctx.reply(
-      "⚠️ YouTube временно ограничил загрузку аудио. Попробуйте ещё раз через минуту — ссылки на прослушивание работают.",
+      "⚠️ Аудио временно недоступно, но ссылки на прослушивание работают.",
     );
   }
 }
-
 bot.callbackQuery(/^lyrics:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery();
   const videoId = ctx.match[1];

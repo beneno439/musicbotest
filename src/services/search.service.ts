@@ -146,3 +146,60 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     filter: "audioonly",
   });
 }
+
+/**
+ * Retries an async operation with exponential backoff.
+ * Useful for ytdl-core / YouTube 429 (Too Many Requests) errors,
+ * which are usually transient throttling rather than permanent failures.
+ */
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: {
+    retries?: number;
+    baseDelayMs?: number;
+    isRetryable?: (error: unknown) => boolean;
+  } = {},
+): Promise<T> {
+  const {
+    retries = 3,
+    baseDelayMs = 1000,
+    isRetryable = defaultIsRetryable,
+  } = options;
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt === retries || !isRetryable(error)) {
+        throw error;
+      }
+      // Exponential backoff with jitter: 1s, 2s, 4s... + up to 300ms random
+      const delay = baseDelayMs * 2 ** attempt + Math.random() * 300;
+      console.warn(
+        `Retryable error on attempt ${attempt + 1}/${retries + 1}, retrying in ${Math.round(delay)}ms:`,
+        error,
+      );
+      await sleep(delay);
+    }
+  }
+  throw lastError;
+}
+
+function defaultIsRetryable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const statusCode =
+    error instanceof Error && "statusCode" in error
+      ? (error as { statusCode?: number }).statusCode
+      : undefined;
+  return (
+    statusCode === 429 ||
+    message.includes("429") ||
+    message.includes("Status code: 429")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

@@ -26,22 +26,18 @@ export async function getAlternativeLinks(
     spotify: `https://open.spotify.com/search/${encodeURIComponent(searchQuery)}`,
   };
 
+  // Odesli/song.link's public API does NOT use Bearer auth.
+  // The free endpoint works with no key at all (rate limited).
+  // A paid/whitelisted key, if you have one, goes in the query string as `key=`.
   const apiKey = process.env.SONGLINK_API_KEY;
-  if (!apiKey) {
-    cache.set(youtubeUrl, fallback);
-    return fallback;
-  }
+  const url = new URL("https://api.song.link/v1-alpha.1/links");
+  url.searchParams.set("url", youtubeUrl);
+  if (apiKey) url.searchParams.set("key", apiKey);
 
   try {
-    const response = await fetch(
-      `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(youtubeUrl)}`,
-      {
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-      },
-    );
+    const response = await fetch(url.toString(), {
+      headers: { Accept: "application/json" },
+    });
     if (!response.ok) throw new Error(`song.link API ${response.status}`);
     const data = (await response.json()) as SongLinkResponse;
     const links: AlternativeLinks = {
@@ -54,7 +50,10 @@ export async function getAlternativeLinks(
     cache.set(youtubeUrl, links);
     return links;
   } catch (error) {
-    console.warn("Alternative links lookup failed; using fallback links.", error);
+    console.warn(
+      "Alternative links lookup failed; using fallback links.",
+      error,
+    );
     cache.set(youtubeUrl, fallback);
     return fallback;
   }
