@@ -1,11 +1,13 @@
 import "dotenv/config";
-import { Bot, Context, InlineKeyboard } from "grammy";
+import { Bot, Context, InlineKeyboard, InputFile } from "grammy";
 import { errorMiddleware } from "./middlewares/error.middleware.js";
 import {
   getTrackByVideoId,
+  getAudioStream,
   searchTrack,
   Track,
 } from "./services/search.service.js";
+import { getAlternativeLinks } from "./services/links.service.js";
 import {
   escapeHtml,
   extractYouTubeId,
@@ -55,7 +57,10 @@ async function sendAd(ctx: Context): Promise<void> {
 async function sendTrack(ctx: Context, track: Track): Promise<void> {
   await ctx.replyWithChatAction("upload_photo");
 
-  const album = await getAlbumInfo(track.title, track.artist);
+  const [album, links] = await Promise.all([
+    getAlbumInfo(track.title, track.artist),
+    getAlternativeLinks(track.watchUrl),
+  ]);
   const photo = album?.artworkUrl ?? track.thumbnail;
   const albumLine = album?.albumName
     ? `\n💿 ${escapeHtml(album.albumName)}`
@@ -63,20 +68,33 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   const caption = `🎵 ${escapeHtml(track.title)} — ${escapeHtml(track.artist)}${albumLine}\n\n${track.watchUrl}`;
 
   const keyboard = new InlineKeyboard()
-    .url("▶️ Слушать", track.watchUrl)
-    .url("ℹ️ Инфо", `https://song.link/y/${track.videoId}`)
+    .url("▶️ YouTube", links.youtube)
+    .url("🎧 Song.link", links.songLink)
+    .row();
+  if (links.spotify) {
+    keyboard.url("🟢 Spotify", links.spotify).row();
+  }
+  keyboard
+    .url("📝 Открыть текст", geniusSearchUrl(track.title, track.artist))
+    .text("📨 Отправить текст", `lyrics:${track.videoId}`)
     .row()
-    .url("📝 Текст песни", geniusSearchUrl(track.title, track.artist));
+    .url("🔗 Текст в Genius", geniusSearchUrl(track.title, track.artist));
 
   await ctx.replyWithPhoto(photo, {
     caption,
     parse_mode: "HTML",
     reply_markup: keyboard,
   });
+
+  const audio = getAudioStream(track.videoId);
+  await ctx.replyWithAudio(new InputFile(audio, `${track.artist} - ${track.title}.mp3`), {
+    title: track.title,
+    performer: track.artist,
+    caption: `🎵 ${track.title} — ${track.artist}`,
+  });
 }
 
 async function fetchLyrics(query: string): Promise<string | null> {
-  if (process.env.SEND_LYRICS !== "true") return null;
   const parts = query
     .split(/\s+[–—-]\s+|,\s*/)
     .map((part) => part.trim())
@@ -89,6 +107,27 @@ async function fetchLyrics(query: string): Promise<string | null> {
   const data = (await response.json()) as { lyrics?: string };
   return data.lyrics || null;
 }
+
+bot.callbackQuery(/^lyrics:(.+)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const videoId = ctx.match[1];
+  const track = await getTrackByVideoId(videoId);
+  if (!track) {
+    await ctx.reply("⚠️ Не удалось найти эту песню заново.");
+    return;
+  }
+
+  const lyrics = await fetchLyrics(`${track.artist} - ${track.title}`);
+  if (!lyrics) {
+    await ctx.reply(
+      `Текст не найден. Попробуйте открыть Genius:\n${geniusSearchUrl(track.title, track.artist)}`,
+    );
+    return;
+  }
+  await ctx.reply(
+    `📝 ${track.title} — ${track.artist}\n\n${lyrics}`,
+  );
+});
 
 bot.command("start", async (ctx) => {
   await ctx.reply(

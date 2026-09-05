@@ -1,5 +1,6 @@
 import { GetListByKeyword, SearchResult } from "youtube-search-api";
 import ytdl from "ytdl-core";
+import { Readable } from "node:stream";
 import {
   canReadVideoInfo,
   getThumbnail,
@@ -86,4 +87,14 @@ export async function searchTrack(query: string): Promise<Track | null> {
     }
   }
   return null;
+}
+
+export function getAudioStream(videoId: string): Readable {
+  if (!canReadVideoInfo(videoId) || blockList(videoId)) {
+    throw new Error("The requested video cannot be downloaded.");
+  }
+  return ytdl(videoId, {
+    quality: "highestaudio",
+    filter: "audioonly",
+  });
 }
