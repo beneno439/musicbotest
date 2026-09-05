@@ -89,19 +89,32 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   });
 
   try {
-    const audio = await getAudioStream(track.videoId);
-    await ctx.replyWithAudio(
-      new InputFile(audio, `${track.artist} - ${track.title}.m4a`),
-      {
-        title: track.title,
-        performer: track.artist,
-        caption: `🎵 ${track.title} — ${track.artist}`,
-      },
-    );
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        const audio = await getAudioStream(track.videoId);
+        await ctx.replyWithAudio(
+          new InputFile(audio, `${track.artist} - ${track.title}.m4a`),
+          {
+            title: track.title,
+            performer: track.artist,
+            caption: `🎵 ${track.title} — ${track.artist}`,
+          },
+        );
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    }
+    if (lastError) throw lastError;
   } catch (error) {
     console.error(`Audio upload failed for ${track.videoId}:`, error);
     await ctx.reply(
-      "⚠️ Аудио временно недоступно, но ссылки на прослушивание работают.",
+      "⚠️ YouTube временно ограничил загрузку аудио. Попробуйте ещё раз через минуту — ссылки на прослушивание работают.",
     );
   }
 }

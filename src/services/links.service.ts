@@ -26,10 +26,21 @@ export async function getAlternativeLinks(
     spotify: `https://open.spotify.com/search/${encodeURIComponent(searchQuery)}`,
   };
 
+  const apiKey = process.env.SONGLINK_API_KEY;
+  if (!apiKey) {
+    cache.set(youtubeUrl, fallback);
+    return fallback;
+  }
+
   try {
     const response = await fetch(
       `https://api.song.link/v1-alpha.1/links?url=${encodeURIComponent(youtubeUrl)}`,
-      { headers: { Accept: "application/json" } },
+      {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+      },
     );
     if (!response.ok) throw new Error(`song.link API ${response.status}`);
     const data = (await response.json()) as SongLinkResponse;
@@ -43,7 +54,7 @@ export async function getAlternativeLinks(
     cache.set(youtubeUrl, links);
     return links;
   } catch (error) {
-    console.error("Alternative links lookup failed:", error);
+    console.warn("Alternative links lookup failed; using fallback links.", error);
     cache.set(youtubeUrl, fallback);
     return fallback;
   }

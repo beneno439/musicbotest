@@ -19,6 +19,52 @@ export interface Track {
 const cache = new Map<string, Track>();
 const blockedVideoIds = new Set<string>();
 
+function youtubeOptions(): Parameters<typeof ytdl.getInfo>[1] {
+  const options: Parameters<typeof ytdl.getInfo>[1] = {
+    playerClients: ["WEB_EMBEDDED", "IOS", "ANDROID", "TV"],
+    requestOptions: {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
+      },
+    },
+  };
+
+  const cookies = process.env.YOUTUBE_COOKIES_JSON;
+  if (cookies) {
+    try {
+      options.agent = ytdl.createAgent(JSON.parse(cookies));
+    } catch (error) {
+      console.error("YOUTUBE_COOKIES_JSON is invalid:", error);
+    }
+  }
+
+  const proxy = process.env.YOUTUBE_PROXY;
+  if (proxy) {
+    options.agent = ytdl.createProxyAgent({ uri: proxy });
+  }
+  return options;
+}
+
+async function getInfoWithRetry(videoId: string) {
+  let lastError: unknown;
+  for (const playerClients of [
+    ["WEB_EMBEDDED", "IOS", "ANDROID", "TV"] as const,
+    ["WEB", "ANDROID", "IOS"] as const,
+  ]) {
+    try {
+      return await ytdl.getInfo(videoId, {
+        ...youtubeOptions(),
+        playerClients: [...playerClients],
+      });
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+  }
+  throw lastError;
+}
+
 export function blockList(videoId: string): boolean {
   return blockedVideoIds.has(videoId);
 }
@@ -53,7 +99,7 @@ export async function getTrackByVideoId(
   let title = videoId;
   let artist = "YouTube";
   try {
-    const info = await ytdl.getInfo(videoId);
+    const info = await getInfoWithRetry(videoId);
     title = info.videoDetails.title;
     artist = info.videoDetails.author.name || artist;
   } catch {
@@ -93,8 +139,9 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   if (!canReadVideoInfo(videoId) || blockList(videoId)) {
     throw new Error("The requested video cannot be downloaded.");
   }
-  const info = await ytdl.getInfo(videoId);
+  const info = await getInfoWithRetry(videoId);
   return ytdl.downloadFromInfo(info, {
+    ...youtubeOptions(),
     quality: "highestaudio",
     filter: "audioonly",
   });
