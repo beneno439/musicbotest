@@ -26,7 +26,7 @@ const blockedVideoIds = new Set<string>();
 const bundledYtDlp = join(
   process.cwd(),
   "bin",
-  process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp",
+  process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp_linux",
 );
 const ytdlp = new YTDlpWrap(process.env.YT_DLP_PATH || bundledYtDlp);
 
