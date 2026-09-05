@@ -90,7 +90,8 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   } catch (error) {
     console.error(`Audio upload failed for ${track.videoId}:`, error);
     await ctx.reply(
-      "⚠️ Аудио временно недоступно, но ссылки на прослушивание работают.",
+      "⚠️ Полное аудио сейчас недоступно: YouTube ограничил загрузку для сервера. " +
+        "Добавьте YOUTUBE_COOKIES_JSON или YOUTUBE_PROXY и попробуйте снова.",
     );
   }
 }
