@@ -264,7 +264,12 @@ function youtubeOptions(): Parameters<typeof ytdl.getInfo>[1] {
 
   if (cookies) {
     try {
-      options.agent = ytdl.createAgent(JSON.parse(cookies));
+      const parsedCookies =
+        typeof cookies === "string" ? JSON.parse(cookies) : cookies;
+      if (!Array.isArray(parsedCookies)) {
+        throw new Error("Cookies must be a JSON array.");
+      }
+      options.agent = ytdl.createAgent(parsedCookies);
     } catch (error) {
       console.error("YOUTUBE_COOKIES_JSON is invalid:", error);
     }
