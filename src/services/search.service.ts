@@ -118,6 +118,8 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     "--no-playlist",
     "--no-part",
     "--quiet",
+    "--js-runtimes", "node",
+    "--extractor-args", "youtube:player_client=tv,web",
   ];
   const cookiesSetting =
     process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES_JSON;
