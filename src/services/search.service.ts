@@ -1,7 +1,7 @@
 import { GetListByKeyword, SearchResult } from "youtube-search-api";
 import YTDlpWrap from "yt-dlp-wrap";
 import { createReadStream } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -152,11 +152,32 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     directory: string,
   ): Promise<string> {
     const trimmed = setting.trim();
+
+    if (trimmed.startsWith("/") || trimmed.startsWith(".") || trimmed.startsWith("~")) {
+      try {
+        const fileContent = await readFile(trimmed, "utf8");
+        const normalized = fileContent.trim();
+        if (normalized.startsWith("[") || normalized.startsWith("{")) {
+          return writeCookiesJson(normalized, directory);
+        }
+        return trimmed;
+      } catch {
+        return trimmed;
+      }
+    }
+
     if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
       return trimmed;
     }
 
-    const parsed: unknown = JSON.parse(trimmed);
+    return writeCookiesJson(trimmed, directory);
+  }
+
+  async function writeCookiesJson(
+    jsonText: string,
+    directory: string,
+  ): Promise<string> {
+    const parsed: unknown = JSON.parse(jsonText);
     if (!Array.isArray(parsed)) {
       throw new Error("YouTube cookies JSON must be an array.");
     }
