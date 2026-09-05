@@ -1,7 +1,7 @@
 import { GetListByKeyword, SearchResult } from "youtube-search-api";
 import YTDlpWrap from "yt-dlp-wrap";
 import { createReadStream } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
@@ -119,9 +119,17 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     "--no-part",
     "--quiet",
   ];
-  const cookiesFile = process.env.YOUTUBE_COOKIES_FILE;
+  const cookiesSetting =
+    process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES_JSON;
   const proxy = process.env.YOUTUBE_PROXY;
-  if (cookiesFile) args.push("--cookies", cookiesFile);
+  let generatedCookiesFile: string | undefined;
+  if (cookiesSetting) {
+    generatedCookiesFile = await createCookiesFile(
+      cookiesSetting,
+      directory,
+    );
+    args.push("--cookies", generatedCookiesFile);
+  }
   if (proxy) args.push("--proxy", proxy);
   if (ffmpegPath) args.push("--ffmpeg-location", ffmpegPath);
 
@@ -137,6 +145,51 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   } catch (error) {
     await rm(directory, { recursive: true, force: true });
     throw error;
+  }
+
+  async function createCookiesFile(
+    setting: string,
+    directory: string,
+  ): Promise<string> {
+    const trimmed = setting.trim();
+    if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+      return trimmed;
+    }
+
+    const parsed: unknown = JSON.parse(trimmed);
+    if (!Array.isArray(parsed)) {
+      throw new Error("YouTube cookies JSON must be an array.");
+    }
+
+    const lines = [
+      "# Netscape HTTP Cookie File",
+      ...parsed.map((item) => {
+        if (!item || typeof item !== "object") {
+          throw new Error("Invalid YouTube cookie entry.");
+        }
+        const cookie = item as Record<string, unknown>;
+        const domain = String(cookie.domain ?? "");
+        const path = String(cookie.path ?? "/");
+        const name = String(cookie.name ?? "");
+        const value = String(cookie.value ?? "");
+        if (!domain || !name) {
+          throw new Error("YouTube cookie is missing domain or name.");
+        }
+        const includeSubdomains = domain.startsWith(".") ? "TRUE" : "FALSE";
+        const secure = cookie.secure === true ? "TRUE" : "FALSE";
+        const expiry =
+          typeof cookie.expirationDate === "number"
+            ? Math.floor(cookie.expirationDate)
+            : 0;
+        return [domain, includeSubdomains, path, secure, expiry, name, value].join(
+          "\t",
+        );
+      }),
+      "",
+    ];
+    const filePath = join(directory, "cookies.txt");
+    await writeFile(filePath, lines.join("\n"), "utf8");
+    return filePath;
   }
 }
 
