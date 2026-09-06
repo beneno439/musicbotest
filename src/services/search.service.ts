@@ -28,12 +28,22 @@ export interface Track {
   duration: string;
 }
 
-const cache = new Map<string, Track>();
+const cache = new Map<string, Track | Track[]>();
 const apifyAudioCache = new Map<string, string>();
 const blockedVideoIds = new Set<string>();
 const b2Client = createB2Client();
+const popularity = new Map<string, number>();
+let popularityLoaded: Promise<void> | null = null;
+let popularityWrite: Promise<void> = Promise.resolve();
 export function blockList(videoId: string): boolean {
   return blockedVideoIds.has(videoId);
+}
+
+export async function recordTrackSelection(videoId: string): Promise<void> {
+  await loadPopularity();
+  popularity.set(videoId, (popularity.get(videoId) ?? 0) + 1);
+  popularityWrite = popularityWrite.then(() => savePopularity());
+  await popularityWrite;
 }
 
 function toTrack(item: SearchResult): Track | null {
@@ -71,7 +81,7 @@ export async function getTrackByVideoId(
 ): Promise<Track | null> {
   const key = `id:${videoId}`;
   const cached = cache.get(key);
-  if (cached) return cached;
+  if (cached && !Array.isArray(cached)) return cached;
   if (!canReadVideoInfo(videoId) || blockList(videoId)) return null;
 
   let title = videoId;
@@ -96,7 +106,9 @@ export async function searchTrack(query: string): Promise<Track | null> {
 export async function searchTracks(query: string, limit = 6): Promise<Track[]> {
   const key = `q:${normalizeQuery(query)}`;
   const cached = cache.get(key);
-  if (cached) return [cached];
+  if (cached && Array.isArray(cached)) {
+    return await sortSearchResults(cached);
+  }
 
   // youtube-search-api expects a boolean, result limit, and an options array.
   const result = await GetListByKeyword(query, false, Math.max(limit, 1), [
@@ -111,12 +123,109 @@ export async function searchTracks(query: string, limit = 6): Promise<Track[]> {
       if (tracks.length >= limit) break;
     }
   }
-  if (tracks.length > 0) cache.set(key, tracks[0]);
-  return tracks;
+  if (tracks.length > 0) cache.set(key, tracks);
+  return await sortSearchResults(tracks);
+}
+
+async function sortSearchResults(tracks: Track[]): Promise<Track[]> {
+  await loadPopularity();
+  const cachedIds = await getCachedAudioIds(tracks);
+  return tracks
+    .map((track, index) => ({ track, index }))
+    .sort((a, b) => {
+      const aCached = cachedIds.has(a.track.videoId) ? 1 : 0;
+      const bCached = cachedIds.has(b.track.videoId) ? 1 : 0;
+      if (aCached !== bCached) return bCached - aCached;
+      const popularityDifference =
+        (popularity.get(b.track.videoId) ?? 0) -
+        (popularity.get(a.track.videoId) ?? 0);
+      return popularityDifference || a.index - b.index;
+    })
+    .map(({ track }) => track);
+}
+
+async function getCachedAudioIds(tracks: Track[]): Promise<Set<string>> {
+  if (!b2Client || !process.env.B2_BUCKET_NAME) return new Set();
+  const results = await Promise.all(
+    tracks.map(async (track) => ({
+      videoId: track.videoId,
+      cached: await hasB2Object(`audio/${track.videoId}.mp3`),
+    })),
+  );
+  return new Set(results.filter((item) => item.cached).map((item) => item.videoId));
+}
+
+async function hasB2Object(key: string): Promise<boolean> {
+  if (!b2Client || !process.env.B2_BUCKET_NAME) return false;
+  try {
+    await b2Client.send(
+      new HeadObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: key }),
+    );
+    return true;
+  } catch (error) {
+    const statusCode =
+      error && typeof error === "object" && "$metadata" in error
+        ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+            ?.httpStatusCode
+        : undefined;
+    if (statusCode === 404) return false;
+    throw error;
+  }
+}
+
+async function loadPopularity(): Promise<void> {
+  if (!popularityLoaded) {
+    popularityLoaded = readPopularity();
+  }
+  await popularityLoaded;
+}
+
+async function readPopularity(): Promise<void> {
+  if (!b2Client || !process.env.B2_BUCKET_NAME) return;
+  try {
+    const result = await b2Client.send(
+      new GetObjectCommand({
+        Bucket: process.env.B2_BUCKET_NAME,
+        Key: "metadata/track-popularity.json",
+      }),
+    );
+    if (!result.Body) return;
+    const data: unknown = JSON.parse(
+      Buffer.from(await result.Body.transformToByteArray()).toString("utf8"),
+    );
+    if (data && typeof data === "object") {
+      for (const [videoId, count] of Object.entries(data)) {
+        if (typeof count === "number" && Number.isFinite(count) && count > 0) {
+          popularity.set(videoId, count);
+        }
+      }
+    }
+  } catch (error) {
+    const statusCode =
+      error && typeof error === "object" && "$metadata" in error
+        ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+            ?.httpStatusCode
+        : undefined;
+    if (statusCode !== 404) throw error;
+  }
+}
+
+async function savePopularity(): Promise<void> {
+  if (!b2Client || !process.env.B2_BUCKET_NAME) return;
+  await b2Client.send(
+    new PutObjectCommand({
+      Bucket: process.env.B2_BUCKET_NAME,
+      Key: "metadata/track-popularity.json",
+      Body: JSON.stringify(Object.fromEntries(popularity)),
+      ContentType: "application/json",
+    }),
+  );
 }
 
 export async function getAudioStream(videoId: string): Promise<Readable> {
-  const track = cache.get(`id:${videoId}`);
+  const cachedTrack = cache.get(`id:${videoId}`);
+  const track =
+    cachedTrack && !Array.isArray(cachedTrack) ? cachedTrack : undefined;
   if ((!track && !canReadVideoInfo(videoId)) || blockList(videoId)) {
     throw new Error("The requested video cannot be downloaded.");
   }

@@ -6,6 +6,7 @@ import {
   getAudioStream,
   searchTracks,
   Track,
+  recordTrackSelection,
   withRetry,
 } from "./services/search.service.js";
 import { getAlternativeLinks } from "./services/links.service.js";
@@ -149,6 +150,7 @@ bot.callbackQuery(/^track:(.+)$/, async (ctx) => {
     await ctx.reply("⚠️ Не удалось найти выбранную песню заново.");
     return;
   }
+  await recordTrackSelection(track.videoId);
   await sendTrack(ctx, track);
 });
 
