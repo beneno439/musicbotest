@@ -2,5 +2,5 @@ node_modules
 dist
 bin
 выгрузил чат примера
-\.env
+*.env
 что у нас в нашем боте

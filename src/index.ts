@@ -17,6 +17,7 @@ import {
 } from "./utils/helpers.js";
 import { getAlbumInfo } from "./services/itunes.service.js";
 import { findLyrics } from "./services/lyrics.service.js";
+import { recognizeTelegramAudio } from "./services/recognition.service.js";
 
 const token = process.env.BOT_TOKEN;
 if (!token || token === "YOUR_TELEGRAM_BOT_TOKEN") {
@@ -37,6 +38,31 @@ function botUsername(): string {
 async function sendAd(ctx: Context): Promise<void> {
   if (Math.random() < 0.3)
     await ctx.reply(ADS[Math.floor(Math.random() * ADS.length)]);
+}
+
+async function showSearchResults(ctx: Context, query: string): Promise<void> {
+  const tracks = await searchTracks(query);
+  if (tracks.length === 0) {
+    await ctx.reply("🔍 Ничего не найдено. Попробуйте уточнить название.");
+    return;
+  }
+  const keyboard = new InlineKeyboard();
+  for (const [index, result] of tracks.entries()) {
+    const label = `${index + 1}. ${result.title}`.slice(0, 60);
+    keyboard.text(label, `track:${result.videoId}`).row();
+  }
+  await ctx.reply("🎵 Выберите песню:", { reply_markup: keyboard });
+}
+
+async function recognizeAndSearch(ctx: Context, fileId: string): Promise<void> {
+  await ctx.replyWithChatAction("typing");
+  const recognized = await recognizeTelegramAudio(ctx, fileId);
+  if (!recognized) {
+    await ctx.reply("🔍 Не удалось распознать песню. Отправьте более длинный и чистый фрагмент.");
+    return;
+  }
+  await ctx.reply(`🎧 Похоже на: ${recognized.artist} — ${recognized.title}`);
+  await showSearchResults(ctx, `${recognized.artist} ${recognized.title}`);
 }
 
 async function sendTrack(ctx: Context, track: Track): Promise<void> {
@@ -143,17 +169,7 @@ bot.on("message:text", async (ctx) => {
     if (videoId) {
       track = await getTrackByVideoId(videoId);
     } else {
-      const tracks = await searchTracks(text);
-      if (tracks.length === 0) {
-        await ctx.reply("🔍 Ничего не найдено. Попробуйте уточнить название.");
-        return;
-      }
-      const keyboard = new InlineKeyboard();
-      for (const [index, result] of tracks.entries()) {
-        const label = `${index + 1}. ${result.title}`.slice(0, 60);
-        keyboard.text(label, `track:${result.videoId}`).row();
-      }
-      await ctx.reply("🎵 Выберите песню:", { reply_markup: keyboard });
+      await showSearchResults(ctx, text);
       return;
     }
   } catch (error) {
@@ -168,6 +184,19 @@ bot.on("message:text", async (ctx) => {
     return;
   }
   await sendTrack(ctx, track);
+});
+
+bot.on(["message:audio", "message:voice"], async (ctx) => {
+  const fileId = ctx.message.audio?.file_id ?? ctx.message.voice?.file_id;
+  if (!fileId) return;
+  try {
+    await recognizeAndSearch(ctx, fileId);
+  } catch (error) {
+    console.error("Audio recognition failed:", error);
+    await ctx.reply(
+      "⚠️ Не удалось распознать аудио. Проверьте настройку AUDD_API_TOKEN и отправьте фрагмент ещё раз.",
+    );
+  }
 });
 
 bot.catch((error) => console.error("Fatal update error:", error));
