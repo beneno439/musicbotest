@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Context } from "grammy";
+import { Nexara } from "nexara-sdk";
 
 interface AcrCloudResponse {
   status?: { code?: number; msg?: string };
@@ -18,6 +19,46 @@ interface AcrCloudResponse {
 export interface RecognizedTrack {
   artist: string;
   title: string;
+}
+
+export async function transcribeTelegramVoice(
+  ctx: Context,
+  fileId: string,
+): Promise<string | null> {
+  const apiKey = process.env.NEXARA_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("NEXARA_API_KEY is not configured.");
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), "voice-transcription-"));
+  try {
+    const file = await ctx.api.getFile(fileId);
+    if (!file.file_path) {
+      throw new Error("Telegram did not provide a voice file path.");
+    }
+    const maxBytes = Number(process.env.MAX_RECOGNITION_BYTES || 25_000_000);
+    if (file.file_size && file.file_size > maxBytes) {
+      throw new Error(`Voice file exceeds the ${maxBytes}-byte transcription limit.`);
+    }
+
+    const extension = file.file_path.includes(".")
+      ? file.file_path.slice(file.file_path.lastIndexOf("."))
+      : ".ogg";
+    const voicePath = join(directory, `voice${extension}`);
+    const download = await fetch(
+      `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`,
+    );
+    if (!download.ok) {
+      throw new Error(`Telegram voice download failed with status ${download.status}.`);
+    }
+    await writeFile(voicePath, Buffer.from(await download.arrayBuffer()));
+
+    const client = new Nexara({ apiKey });
+    const result = await client.transcriptions.create({ file: voicePath });
+    return result.text?.trim() || null;
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 export async function recognizeTelegramMedia(

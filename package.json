@@ -14,6 +14,7 @@
     "@grammyjs/parse-mode": "github:grammyjs/parse-mode",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",
+    "nexara-sdk": "^0.4.0",
     "youtube-search-api": "^1.2.0"
   },
   "devDependencies": {

@@ -18,7 +18,10 @@ import {
 } from "./utils/helpers.js";
 import { getAlbumInfo } from "./services/itunes.service.js";
 import { findLyrics } from "./services/lyrics.service.js";
-import { recognizeTelegramMedia } from "./services/recognition.service.js";
+import {
+  recognizeTelegramMedia,
+  transcribeTelegramVoice,
+} from "./services/recognition.service.js";
 
 const token = process.env.BOT_TOKEN;
 if (!token || token === "YOUR_TELEGRAM_BOT_TOKEN") {
@@ -194,10 +197,26 @@ bot.on("message:text", async (ctx) => {
   await sendTrack(ctx, track);
 });
 
-bot.on(["message:audio", "message:voice", "message:video"], async (ctx) => {
+bot.on("message:voice", async (ctx) => {
+  try {
+    await ctx.replyWithChatAction("typing");
+    const text = await transcribeTelegramVoice(ctx, ctx.message.voice.file_id);
+    await ctx.reply(
+      text
+        ? `📝 Распознанный текст:\n${text}`
+        : "📝 Не удалось распознать голосовое сообщение.",
+    );
+  } catch (error) {
+    console.error("Nexara voice transcription failed:", error);
+    await ctx.reply(
+      "⚠️ Не удалось распознать голосовое сообщение. Проверьте NEXARA_API_KEY.",
+    );
+  }
+});
+
+bot.on(["message:audio", "message:video"], async (ctx) => {
   const fileId =
     ctx.message.audio?.file_id ??
-    ctx.message.voice?.file_id ??
     ctx.message.video?.file_id;
   if (!fileId) return;
   try {
