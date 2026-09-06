@@ -58,13 +58,19 @@ async function showSearchResults(ctx: Context, query: string): Promise<void> {
 
 async function recognizeAndSearch(ctx: Context, fileId: string): Promise<void> {
   await ctx.replyWithChatAction("typing");
-  const recognized = await recognizeTelegramAudio(ctx, fileId);
-  if (!recognized) {
-    await ctx.reply("🔍 Не удалось распознать песню. Отправьте более длинный и чистый фрагмент.");
-    return;
+  try {
+    const recognized = await recognizeTelegramAudio(ctx, fileId);
+    if (!recognized) {
+      await ctx.reply(
+        "🔍 Не удалось распознать песню. Отправьте более длинный и чистый фрагмент.",
+      );
+      return;
+    }
+    await ctx.reply(`🎧 Похоже на: ${recognized.artist} — ${recognized.title}`);
+    await showSearchResults(ctx, `${recognized.artist} ${recognized.title}`);
+  } catch (error) {
+    console.error(error);
   }
-  await ctx.reply(`🎧 Похоже на: ${recognized.artist} — ${recognized.title}`);
-  await showSearchResults(ctx, `${recognized.artist} ${recognized.title}`);
 }
 
 async function sendTrack(ctx: Context, track: Track): Promise<void> {
