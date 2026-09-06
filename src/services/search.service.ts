@@ -105,47 +105,74 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   const outputPath = join(directory, `${videoId}.mp3`);
 
   try {
-    const apiKey =
-      process.env.VIDEO_DOWNLOAD_API_KEY || process.env.AOU_KEY_VDA;
+    const apiKey = process.env.APIFY_API_TOKEN;
     if (!apiKey) {
-      throw new Error("VIDEO_DOWNLOAD_API_KEY is not configured.");
+      throw new Error("APIFY_API_TOKEN is not configured.");
     }
-    const host = process.env.VIDEO_DOWNLOAD_API_HOST || "p.savenow.to";
-    const createUrl = new URL(`https://${host}/ajax/download.php`);
-    createUrl.searchParams.set(
-      "url",
-      track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
+    const actorId =
+      process.env.APIFY_ACTOR_ID || "streamers~youtube-video-downloader";
+    const runUrl = new URL(
+      `https://api.apify.com/v2/acts/${actorId}/runs`,
     );
-    createUrl.searchParams.set("format", "mp3");
-    createUrl.searchParams.set("apikey", apiKey);
-    createUrl.searchParams.set("add_info", "1");
-    createUrl.searchParams.set("audio_quality", "192");
-
-    const createResponse = await fetch(createUrl);
-    const createBody = await createResponse.text();
-    let createPayload: {
-      success?: boolean;
-      id?: string;
-      error?: string;
-      message?: string;
-    };
+    runUrl.searchParams.set("token", apiKey);
+    runUrl.searchParams.set("waitForFinish", "300");
+    const runResponse = await fetch(runUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        videos: [{
+          url: track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
+        }],
+        storeInKVStore: true,
+        preferredFormat: "mp3",
+        filenameTemplateParts: ["title"],
+      }),
+    });
+    const runBody = await runResponse.text();
+    let runPayload: {
+      data?: { status?: string; defaultDatasetId?: string };
+      error?: { message?: string };
+    } = {};
     try {
-      createPayload = JSON.parse(createBody) as typeof createPayload;
+      runPayload = JSON.parse(runBody) as typeof runPayload;
     } catch {
-      createPayload = {};
+      // Preserve the raw response in the error below.
     }
-    if (!createResponse.ok || !createPayload.success || !createPayload.id) {
+    const run = runPayload.data;
+    if (!runResponse.ok || !run?.defaultDatasetId || run.status !== "SUCCEEDED") {
       throw new Error(
-        `Video Download API rejected the job: ${
-          createPayload.error ||
-          createPayload.message ||
-          createBody.slice(0, 300) ||
-          `HTTP ${createResponse.status}`
+        `Apify Actor failed: ${
+          runPayload.error?.message ||
+          runBody.slice(0, 300) ||
+          `HTTP ${runResponse.status}`
         }`,
       );
     }
 
-    const downloadUrl = await waitForDownload(host, createPayload.id);
+    const datasetUrl = new URL(
+      `https://api.apify.com/v2/datasets/${run.defaultDatasetId}/items`,
+    );
+    datasetUrl.searchParams.set("token", apiKey);
+    datasetUrl.searchParams.set("clean", "1");
+    const datasetResponse = await fetch(datasetUrl);
+    const datasetBody = await datasetResponse.text();
+    if (!datasetResponse.ok) {
+      throw new Error(
+        `Apify dataset request failed: HTTP ${datasetResponse.status} ${datasetBody.slice(0, 300)}`,
+      );
+    }
+    let dataset: unknown;
+    try {
+      dataset = JSON.parse(datasetBody);
+    } catch {
+      throw new Error(`Apify returned invalid dataset JSON: ${datasetBody.slice(0, 300)}`);
+    }
+    const downloadUrl = findDownloadUrl(dataset);
+    if (!downloadUrl) {
+      throw new Error(
+        "Apify Actor completed but returned no downloadable MP3 URL. The Actor may not support audio-only output.",
+      );
+    }
     const response = await fetch(downloadUrl);
     if (!response.ok) {
       throw new Error(
@@ -166,32 +193,27 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   }
 }
 
-async function waitForDownload(host: string, id: string): Promise<string> {
-  const deadline = Date.now() + 5 * 60 * 1000;
-  while (Date.now() < deadline) {
-    const progressUrl = new URL(`https://${host}/ajax/progress.php`);
-    progressUrl.searchParams.set("id", id);
-    const response = await fetch(progressUrl);
-    const payload = (await response.json()) as {
-      success?: number;
-      progress?: number;
-      download_url?: string;
-      text?: string;
-      message?: string;
-    };
-    if (!response.ok || payload.success === 0) {
-      throw new Error(
-        `Video Download API progress failed: ${
-          payload.message || payload.text || `HTTP ${response.status}`
-        }`,
-      );
+function findDownloadUrl(value: unknown): string | null {
+  if (typeof value === "string") {
+    try {
+      const url = new URL(value);
+      return /\.(mp3|m4a|aac|ogg|opus|wav)(?:$|[?#])/i.test(url.pathname)
+        ? url.toString()
+        : null;
+    } catch {
+      return null;
     }
-    if (payload.progress === 1000 && payload.download_url) {
-      return payload.download_url;
-    }
-    await sleep(2000);
   }
-  throw new Error("Video Download API timed out while preparing the audio.");
+  if (Array.isArray(value)) {
+    return value.map(findDownloadUrl).find((url): url is string => Boolean(url)) ?? null;
+  }
+  if (value && typeof value === "object") {
+    for (const item of Object.values(value)) {
+      const url = findDownloadUrl(item);
+      if (url) return url;
+    }
+  }
+  return null;
 }
 
 /**
