@@ -131,7 +131,10 @@ export async function searchZvuchTracks(
 
       try {
         // Переходим на страницу без блокировки запросов, чтобы антибот-скрипты отработали
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+        await page.goto(url, {
+          timeout: 30000, // увеличиваем до 30 секунд
+          waitUntil: "domcontentloaded", // ждем только загрузку DOM, не дожидаясь всех скриптов и рекламы
+        });
 
         // Даем странице время на отрисовку контента или прохождение проверки
         (await page.waitForTimeout)
