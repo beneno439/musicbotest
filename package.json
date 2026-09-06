@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Telegram music search bot for direct audio sources and track recognition", 
+  "description": "Telegram music search bot for direct audio sources and track recognition",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -15,8 +15,12 @@
     "@grammyjs/parse-mode": "github:grammyjs/parse-mode",
     "cheerio": "^1.2.0",
     "dotenv": "^16.4.7",
+    "got-scraping": "^4.2.1",
     "grammy": "^1.35.0",
-    "nexara-sdk": "^0.4.0"
+    "nexara-sdk": "^0.4.0",
+    "puppeteer": "^25.10.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "devDependencies": {
     "@types/node": "^25.9.5",

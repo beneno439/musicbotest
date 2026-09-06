@@ -77,6 +77,12 @@ function transliterate(text: string): string {
     .join("");
 }
 
+import puppeteer from "puppeteer-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+
+// Активируем плагин скрытности
+puppeteer.use(StealthPlugin());
+
 export async function searchZvuchTracks(
   query: string,
   limit = 6,
@@ -84,51 +90,79 @@ export async function searchZvuchTracks(
   const normalized = query.trim();
   if (!normalized) return [];
 
-  const slug = buildTrackSlug(normalized);
+  const cyrillicSlug = encodeURIComponent(normalized.replace(/\s+/g, "-"));
+  const latinSlug = buildTrackSlug(normalized);
+
   const searchUrls = [
-    `${BASE_URL}/tracks/${slug}`,
+    `${BASE_URL}/tracks/${cyrillicSlug}?search=1`,
+    `${BASE_URL}/tracks/${latinSlug}?search=1`,
     `${BASE_URL}/search/${encodeURIComponent(normalized)}/`,
     `${BASE_URL}/?s=${encodeURIComponent(normalized)}`,
   ];
 
-  const seen = new Set<string>();
-  for (const url of searchUrls) {
-    if (seen.has(url)) continue;
-    seen.add(url);
+  // Запускаем браузер с флагами для экономии ресурсов
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--disable-gpu",
+    ],
+  });
 
-    console.log(`[Zvuch Debug] Отправляем запрос на: ${url}`);
+  try {
+    const page = await browser.newPage();
 
-    try {
-      const response = await fetch(url, { headers: REQUEST_HEADERS });
-      console.log(
-        `[Zvuch Debug] Статус ответа: ${response.status} ${response.statusText}`,
-      );
+    // Блокируем тяжелые ресурсы (картинки, стили, шрифты), оставляем только HTML и JS
+    await page.setRequestInterception(true);
+    page.on("request", (req) => {
+      if (
+        ["image", "stylesheet", "font", "media"].includes(req.resourceType())
+      ) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
 
-      if (!response.ok) continue;
+    const seen = new Set<string>();
+    for (const url of searchUrls) {
+      if (seen.has(url)) continue;
+      seen.add(url);
 
-      const html = await response.text();
-      console.log(
-        `[Zvuch Debug] Длина полученного HTML: ${html.length} символов`,
-      );
+      console.log(`[Zvuch Debug] Puppeteer открывает: ${url}`);
 
-      // Выведем кусочек HTML, чтобы понять, это капча/Cloudflare или реальный сайт
-      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-      console.log(
-        `[Zvuch Debug] Заголовок страницы (Title): ${titleMatch ? titleMatch[1] : "Не найден"}`,
-      );
+      try {
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15000 });
 
-      const $ = load(html);
-      const tracks = parseTracksFromHtml($, url, limit);
+        // Ждем максимум 5 секунд, пока Cloudflare нас пропустит и появятся треки
+        await page
+          .waitForSelector(".track-item, .song-item, .track, audio", {
+            timeout: 5000,
+          })
+          .catch(() => {});
 
-      console.log(`[Zvuch Debug] Найдено треков на странице: ${tracks.length}`);
+        const html = await page.content();
+        const $ = load(html);
 
-      if (tracks.length > 0) return tracks;
-    } catch (error) {
-      console.error(
-        `[Zvuch Debug] Ошибка при запросе ${url}:`,
-        (error as Error).message,
-      );
+        const tracks = parseTracksFromHtml($, url, limit);
+        console.log(`[Zvuch Debug] Найдено треков: ${tracks.length}`);
+
+        if (tracks.length > 0) {
+          return tracks;
+        }
+      } catch (error) {
+        console.error(
+          `[Zvuch Debug] Ошибка Puppeteer на ${url}:`,
+          (error as Error).message,
+        );
+      }
     }
+  } finally {
+    // Обязательно закрываем браузер, иначе сервер быстро останется без ОЗУ
+    await browser.close();
   }
 
   return [];
