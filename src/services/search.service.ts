@@ -122,15 +122,25 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     createUrl.searchParams.set("audio_quality", "192");
 
     const createResponse = await fetch(createUrl);
-    const createPayload = (await createResponse.json()) as {
+    const createBody = await createResponse.text();
+    let createPayload: {
       success?: boolean;
       id?: string;
       error?: string;
+      message?: string;
     };
+    try {
+      createPayload = JSON.parse(createBody) as typeof createPayload;
+    } catch {
+      createPayload = {};
+    }
     if (!createResponse.ok || !createPayload.success || !createPayload.id) {
       throw new Error(
         `Video Download API rejected the job: ${
-          createPayload.error || `HTTP ${createResponse.status}`
+          createPayload.error ||
+          createPayload.message ||
+          createBody.slice(0, 300) ||
+          `HTTP ${createResponse.status}`
         }`,
       );
     }
