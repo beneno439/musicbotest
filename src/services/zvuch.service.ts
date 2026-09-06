@@ -22,6 +22,50 @@ const REQUEST_HEADERS = {
   Referer: BASE_URL,
 };
 
+// Простой транслитератор для кириллицы в латиницу для формирования URL slug
+function transliterate(text: string): string {
+  const ruMap: Record<string, string> = {
+    а: "a",
+    б: "b",
+    в: "v",
+    г: "g",
+    д: "d",
+    е: "e",
+    ё: "yo",
+    ж: "zh",
+    з: "z",
+    и: "i",
+    й: "y",
+    к: "k",
+    л: "l",
+    м: "m",
+    н: "n",
+    о: "o",
+    п: "p",
+    р: "r",
+    с: "s",
+    т: "t",
+    у: "u",
+    ф: "f",
+    х: "kh",
+    ц: "ts",
+    ч: "ch",
+    ш: "sh",
+    щ: "shch",
+    ъ: "",
+    ы: "y",
+    ь: "",
+    э: "e",
+    ю: "yu",
+    я: "ya",
+  };
+  return text
+    .toLowerCase()
+    .split("")
+    .map((char) => ruMap[char] || char)
+    .join("");
+}
+
 export async function searchZvuchTracks(
   query: string,
   limit = 6,
@@ -29,60 +73,250 @@ export async function searchZvuchTracks(
   const normalized = query.trim();
   if (!normalized) return [];
 
+  const slug = buildTrackSlug(normalized);
   const searchUrls = [
+    `${BASE_URL}/tracks/${slug}?search=1`,
+    `${BASE_URL}/tracks/${slug}`,
     `${BASE_URL}/?s=${encodeURIComponent(normalized)}`,
     `${BASE_URL}/search/${encodeURIComponent(normalized)}/`,
     `${BASE_URL}/tracks?q=${encodeURIComponent(normalized)}`,
   ];
 
+  const seen = new Set<string>();
   for (const url of searchUrls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+
     try {
       const response = await fetch(url, { headers: REQUEST_HEADERS });
       if (!response.ok) continue;
       const html = await response.text();
       const $ = load(html);
-      const tracks: ZvuchTrack[] = [];
-
-      $(".track-item, .song-item, .track, [data-mp3], [data-url]").each((_, element) => {
-        if (tracks.length >= limit) return false;
-        const $element = $(element);
-        const downloadUrl = pickDownloadUrl(element, $);
-        if (!downloadUrl) return;
-
-        const title =
-          $element.find(".track-title, .song-name, .title, h3, a").first().text().trim() ||
-          $element.text().trim().split(/\s{2,}/)[0] ||
-          "Без названия";
-        const artist =
-          $element.find(".track-artist, .artist-name, .artist, .author").first().text().trim() ||
-          "Неизвестный исполнитель";
-        const duration =
-          $element.find(".track-time, .duration, time").first().text().trim() || "?:??";
-        const pageUrl =
-          $element.find("a").first().attr("href") ||
-          `${BASE_URL}/`;
-
-        tracks.push({
-          id: makeTrackId(downloadUrl),
-          title: title || "Без названия",
-          artist,
-          thumbnail: `https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=1200&q=80`,
-          pageUrl: normalizeUrl(pageUrl),
-          downloadUrl: normalizeUrl(downloadUrl),
-          duration,
-        });
-      });
-
+      const tracks = parseTracksFromHtml($, url, limit);
       if (tracks.length > 0) return tracks;
     } catch {
-      // Keep trying fallback search URLs if the site blocks or changes markup.
+      // Игнорируем ошибки сети для fallback ссылок
     }
   }
 
   return [];
 }
 
-export async function getZvuchAudioStream(downloadUrl: string): Promise<Readable> {
+function parseTracksFromHtml(
+  $: ReturnType<typeof load>,
+  pageUrl: string,
+  limit: number,
+): ZvuchTrack[] {
+  const tracks: ZvuchTrack[] = [];
+
+  const directTrack = extractDirectTrackFromPage($, pageUrl);
+  if (directTrack) {
+    tracks.push(directTrack);
+    if (tracks.length >= limit) return tracks;
+  }
+
+  $(
+    ".track-item, .song-item, .track, [data-mp3], [data-url], [data-id], .track-item__body, .track-card, a[href*='/tracks/']",
+  ).each((_, element) => {
+    if (tracks.length >= limit) return false;
+
+    const $element = $(element);
+    const downloadUrl = pickDownloadUrl(element, $);
+    const href = $element.attr("href");
+    const pageHref = href || $element.find("a").first().attr("href") || pageUrl;
+
+    const candidatePageUrl =
+      pageHref && /\/tracks\//i.test(pageHref)
+        ? normalizeUrl(pageHref)
+        : pageUrl;
+    const titleText =
+      $element
+        .find(".track-title, .song-name, .title, .name, h1, h2, h3, a")
+        .first()
+        .text()
+        .trim() ||
+      $("meta[property='og:title']").attr("content")?.trim() ||
+      $("title").text().trim() ||
+      "Без названия";
+    const artistText =
+      $element
+        .find(".track-artist, .artist-name, .artist, .author, .artist-title")
+        .first()
+        .text()
+        .trim() ||
+      inferArtistFromTitle(titleText) ||
+      "Неизвестный исполнитель";
+    const durationText =
+      $element.find(".track-time, .duration, time").first().text().trim() ||
+      "?:??";
+
+    const finalDownloadUrl =
+      downloadUrl || pickDownloadUrlFromAnchor($element, $);
+    if (!finalDownloadUrl) return;
+
+    const title = cleanTrackTitle(titleText);
+    const artist = cleanArtistName(artistText);
+
+    tracks.push({
+      id: makeTrackId(finalDownloadUrl),
+      title: title || "Без названия",
+      artist,
+      thumbnail: getTrackThumbnail($, candidatePageUrl),
+      pageUrl: candidatePageUrl,
+      downloadUrl: normalizeUrl(finalDownloadUrl),
+      duration: durationText,
+    });
+  });
+
+  return tracks;
+}
+
+function extractDirectTrackFromPage(
+  $: ReturnType<typeof load>,
+  pageUrl: string,
+): ZvuchTrack | null {
+  const rawTitle =
+    $("meta[property='og:title']").attr("content") || $("title").text();
+  const title = cleanTrackTitle(rawTitle || "");
+  if (!title) return null;
+
+  const author = inferArtistFromTitle(title) || "Неизвестный исполнитель";
+  const downloadUrl =
+    pickDownloadUrlFromDom($) || pickDownloadUrlFromAnchor($("body"), $);
+  if (!downloadUrl) return null;
+
+  return {
+    id: makeTrackId(downloadUrl),
+    title,
+    artist: cleanArtistName(author),
+    thumbnail: getTrackThumbnail($, pageUrl),
+    pageUrl: normalizeUrl(pageUrl),
+    downloadUrl: normalizeUrl(downloadUrl),
+    duration: $(".track-time, .duration, time").first().text().trim() || "?:??",
+  };
+}
+
+function getTrackThumbnail(
+  $: ReturnType<typeof load>,
+  pageUrl: string,
+): string {
+  const image =
+    $("meta[property='og:image']").attr("content") ||
+    $("img").first().attr("src") ||
+    "https://images.unsplash.com/photo-1516280440614-37939bbacd81?auto=format&fit=crop&w=1200&q=80";
+
+  return normalizeUrl(image, pageUrl);
+}
+
+function pickDownloadUrlFromDom($: ReturnType<typeof load>): string | null {
+  const candidates = [
+    $("audio").first().attr("src"),
+    $("source").first().attr("src"),
+    $('meta[property="og:audio"]').attr("content"),
+    $('a[href*=".mp3"]').first().attr("href"),
+    $('a[href*="download"]').first().attr("href"),
+    $('a[href*="download_file"]').first().attr("href"),
+    $('a[href*="audio"]').first().attr("href"),
+    $("script")
+      .toArray()
+      .map((node) => $(node).html() || "")
+      .find((text) =>
+        /https?:\/\/[^\s"']+\.(mp3|m4a|aac|wav|ogg)/i.test(text),
+      ) ?? null,
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    const normalized = normalizeUrl(candidate);
+    if (
+      normalized &&
+      (/\.(mp3|m4a|aac|wav|ogg)(?:$|[?#])/i.test(normalized) ||
+        /\/download\//i.test(normalized))
+    ) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function pickDownloadUrlFromAnchor(
+  $element: ReturnType<typeof load> | any,
+  $: ReturnType<typeof load>,
+): string | null {
+  const candidates = [
+    $element.attr("data-mp3"),
+    $element.attr("data-url"),
+    $element.attr("data-file"),
+    $element.find("[data-mp3]").first().attr("data-mp3"),
+    $element.find("[data-url]").first().attr("data-url"),
+    $element.find("[data-file]").first().attr("data-file"),
+    $element
+      .find(
+        "a.download, a[href*='download'], a[href*='.mp3'], a[href*='.m4a'], a[href*='.aac'], a[href*='.wav'], a[href*='.ogg']",
+      )
+      .first()
+      .attr("href"),
+    $("a[href*='.mp3']").first().attr("href"),
+    $("a[href*='download']").first().attr("href"),
+  ].filter((value): value is string => Boolean(value));
+
+  for (const candidate of candidates) {
+    const normalized = normalizeUrl(candidate);
+    if (
+      normalized &&
+      (/\.(mp3|m4a|aac|wav|ogg)(?:$|[?#])/i.test(normalized) ||
+        /\/download\//i.test(normalized))
+    ) {
+      return normalized;
+    }
+  }
+
+  return null;
+}
+
+function buildTrackSlug(query: string): string {
+  const transliterated = transliterate(query);
+  return transliterated
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+function cleanTrackTitle(value: string): string {
+  return value
+    .replace(/\s*[-–—]\s*.*?Zvuch\.?\s*$/i, "")
+    .replace(/\s*музыка\s+в\s+mp3.*$/i, "")
+    .replace(/\s*скачать\s+бесплатно.*$/i, "")
+    .replace(/\s*слушать\s+музыку.*$/i, "")
+    .replace(/\s*на\s+Zvuch\.com.*$/i, "")
+    .replace(/\s*\|\s*.*$/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function cleanArtistName(value: string): string {
+  return (
+    value
+      .replace(/\s*[-–—]\s*.*$/, "")
+      .replace(/^\s*by\s+/i, "")
+      .replace(/\s{2,}/g, " ")
+      .trim() || "Неизвестный исполнитель"
+  );
+}
+
+function inferArtistFromTitle(title: string): string {
+  const cleaned = title.replace(/\s+[-–—]\s+/g, " - ");
+  const match = cleaned.match(/^(.*?)(?:\s+-\s+.*)$/);
+  if (!match) return "";
+  const candidate = match[1].trim();
+  return candidate && candidate.length < title.length ? candidate : "";
+}
+
+export async function getZvuchAudioStream(
+  downloadUrl: string,
+): Promise<Readable> {
   const response = await fetch(normalizeUrl(downloadUrl), {
     headers: {
       ...REQUEST_HEADERS,
@@ -91,28 +325,41 @@ export async function getZvuchAudioStream(downloadUrl: string): Promise<Readable
   });
 
   if (!response.ok || !response.body) {
-    throw new Error(`Failed to fetch Zvuch audio stream: HTTP ${response.status}`);
+    throw new Error(
+      `Failed to fetch Zvuch audio stream: HTTP ${response.status}`,
+    );
   }
 
   return Readable.fromWeb(response.body as any);
 }
 
-function pickDownloadUrl(element: unknown, $: ReturnType<typeof load>): string | null {
+function pickDownloadUrl(
+  element: unknown,
+  $: ReturnType<typeof load>,
+): string | null {
   const $element = $(element as any);
   const candidates = [
     $element.attr("data-mp3"),
     $element.attr("data-url"),
+    $element.attr("data-file"),
     $element.find("[data-mp3]").first().attr("data-mp3"),
     $element.find("[data-url]").first().attr("data-url"),
+    $element.find("[data-file]").first().attr("data-file"),
     $element
-      .find("a.download, a[href*='download'], a[href*='.mp3'], a[href*='.m4a'], a[href*='.aac'], a[href*='.wav'], a[href*='.ogg']")
+      .find(
+        "a.download, a[href*='download'], a[href*='.mp3'], a[href*='.m4a'], a[href*='.aac'], a[href*='.wav'], a[href*='.ogg']",
+      )
       .first()
       .attr("href"),
   ].filter((value): value is string => Boolean(value));
 
   for (const candidate of candidates) {
     const normalized = normalizeUrl(candidate);
-    if (normalized && /\.(mp3|m4a|aac|wav|ogg)(?:$|[?#])/i.test(normalized)) {
+    if (
+      normalized &&
+      (/\.(mp3|m4a|aac|wav|ogg)(?:$|[?#])/i.test(normalized) ||
+        /\/download\//i.test(normalized))
+    ) {
       return normalized;
     }
   }
@@ -120,13 +367,13 @@ function pickDownloadUrl(element: unknown, $: ReturnType<typeof load>): string |
   return null;
 }
 
-function normalizeUrl(value: string): string {
+function normalizeUrl(value: string, baseUrl = BASE_URL): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   if (trimmed.startsWith("//")) return `https:${trimmed}`;
-  if (trimmed.startsWith("/")) return `${BASE_URL}${trimmed}`;
-  return `${BASE_URL}/${trimmed}`;
+  if (trimmed.startsWith("/")) return `${baseUrl}${trimmed}`;
+  return `${baseUrl}/${trimmed}`;
 }
 
 function makeTrackId(value: string): string {
