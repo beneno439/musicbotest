@@ -68,25 +68,15 @@ async function recognizeAndSearch(ctx: Context, fileId: string): Promise<void> {
 async function sendTrack(ctx: Context, track: Track): Promise<void> {
   await ctx.replyWithChatAction("upload_photo");
 
-  const linksPromise =
-    track.source === "soundcloud"
-      ? Promise.resolve({
-          songLink: track.watchUrl,
-          youtube: `https://www.youtube.com/results?search_query=${encodeURIComponent(`${track.artist} ${track.title}`)}`,
-          youtubeMusic: `https://music.youtube.com/search?q=${encodeURIComponent(`${track.artist} ${track.title}`)}`,
-          spotify: `https://open.spotify.com/search/${encodeURIComponent(`${track.artist} ${track.title}`)}`,
-        })
-      : getAlternativeLinks(track.watchUrl, `${track.artist} ${track.title}`);
   const [album, links] = await Promise.all([
     getAlbumInfo(track.title, track.artist),
-    linksPromise,
+    getAlternativeLinks(track.watchUrl, `${track.artist} ${track.title}`),
   ]);
   const photo = album?.artworkUrl ?? track.thumbnail;
   const albumLine = album?.albumName
     ? `\n💿 ${escapeHtml(album.albumName)}`
     : "";
-  const sourceLine = track.source === "soundcloud" ? "☁️ SoundCloud" : "▶️ YouTube";
-  const caption = `🎵 ${escapeHtml(track.title)} — ${escapeHtml(track.artist)}${albumLine}\n${sourceLine}\n\n${track.watchUrl}`;
+  const caption = `🎵 ${escapeHtml(track.title)} — ${escapeHtml(track.artist)}${albumLine}\n▶️ YouTube\n\n${track.watchUrl}`;
 
   const keyboard = new InlineKeyboard()
     .url("▶️ YouTube", links.youtube)
@@ -162,8 +152,8 @@ bot.callbackQuery(/^track:(.+)$/, async (ctx) => {
 bot.command("start", async (ctx) => {
   await ctx.reply(
     "👋 Привет!\nЯ помогу найти музыку 🎶, отправь мне что-то из этого:\n\n" +
-      "🎵 Название песни или исполнителя\n🔤 Слова из песни\n🎙 Голосовое сообщение с музыкой(не умеем)\n" +
-      "📹 Видео с музыкой (не умеем)\n🔊 Аудиозапись (не умеем)\n🎥 Видеосообщение с музыкой(не умеем)\n" +
+      "🎵 Название песни или исполнителя\n🔤 Слова из песни\n🎙 Голосовое сообщение с музыкой\n" +
+      "📹 Видео с музыкой (не умеем)\n🔊 Аудиозапись\n🎥 Видеосообщение с музыкой(не умеем)\n" +
       "🔗 Ссылку на Instagram, TikTok, YouTube и другие сайты\n\n🕺 Наслаждайся!",
   );
 });
