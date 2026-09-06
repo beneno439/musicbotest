@@ -15,8 +15,18 @@ type Transcriber = (
 ) => Promise<TranscriptionResult>;
 
 let transcriberPromise: Promise<Transcriber> | null = null;
+let transcriptionQueue: Promise<unknown> = Promise.resolve();
 
 export async function transcribeTelegramMedia(
+  ctx: Context,
+  fileId: string,
+): Promise<string | null> {
+  const job = transcriptionQueue.then(() => transcribeMedia(ctx, fileId));
+  transcriptionQueue = job.catch(() => undefined);
+  return job;
+}
+
+async function transcribeMedia(
   ctx: Context,
   fileId: string,
 ): Promise<string | null> {
@@ -25,6 +35,12 @@ export async function transcribeTelegramMedia(
     const file = await ctx.api.getFile(fileId);
     if (!file.file_path) {
       throw new Error("Telegram did not provide a media file path.");
+    }
+    const maxBytes = Number(process.env.MAX_TRANSCRIPTION_BYTES || 25_000_000);
+    if (file.file_size && file.file_size > maxBytes) {
+      throw new Error(
+        `Media file is too large for local transcription (maximum ${maxBytes} bytes).`,
+      );
     }
     const extension = file.file_path.includes(".")
       ? file.file_path.slice(file.file_path.lastIndexOf("."))
@@ -56,6 +72,7 @@ async function getTranscriber(): Promise<Transcriber> {
     transcriberPromise = pipeline(
       "automatic-speech-recognition",
       process.env.WHISPER_MODEL || "Xenova/whisper-tiny",
+      { quantized: true },
     ) as Promise<Transcriber>;
   }
   return transcriberPromise;
