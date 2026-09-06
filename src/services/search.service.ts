@@ -1,11 +1,10 @@
 import { GetListByKeyword, SearchResult } from "youtube-search-api";
-import YTDlpWrap from "yt-dlp-wrap";
 import { createReadStream } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import ffmpegPath from "ffmpeg-static";
+import { getDownloadDetails } from "youtube-downloader-cc-api";
 import {
   canReadVideoInfo,
   getThumbnail,
@@ -24,13 +23,6 @@ export interface Track {
 
 const cache = new Map<string, Track>();
 const blockedVideoIds = new Set<string>();
-const bundledYtDlp = join(
-  process.cwd(),
-  "bin",
-  process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp_linux",
-);
-const ytdlp = new YTDlpWrap(process.env.YT_DLP_PATH || bundledYtDlp);
-
 export function blockList(videoId: string): boolean {
   return blockedVideoIds.has(videoId);
 }
@@ -111,35 +103,25 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
 
   const directory = await mkdtemp(join(tmpdir(), "music-bot-"));
   const outputPath = join(directory, `${videoId}.mp3`);
-  const args = [
-    track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
-    "--format", "bestaudio/best",
-    "--extract-audio",
-    "--audio-format", "mp3",
-    "--audio-quality", "0",
-    "--output", outputPath,
-    "--no-playlist",
-    "--no-part",
-    "--quiet",
-    "--js-runtimes", "node",
-  ];
-  args.push("--js-runtimes", "node", "--extractor-args", "youtube:player_client=tv,web");
-  const cookiesSetting =
-    process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES_JSON;
-  const proxy = process.env.YOUTUBE_PROXY;
-  let generatedCookiesFile: string | undefined;
-  if (cookiesSetting) {
-    generatedCookiesFile = await createCookiesFile(
-      cookiesSetting,
-      directory,
-    );
-    args.push("--cookies", generatedCookiesFile);
-  }
-  if (proxy) args.push("--proxy", proxy);
-  if (ffmpegPath) args.push("--ffmpeg-location", ffmpegPath);
 
   try {
-    await ytdlp.execPromise(args);
+    const details = await getDownloadDetails(
+      track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
+      "mp3",
+      "stream",
+    );
+    if ("error" in details || !details.download) {
+      throw new Error(
+        "YouTube downloader API did not return an audio download URL.",
+      );
+    }
+    const response = await fetch(details.download);
+    if (!response.ok) {
+      throw new Error(
+        `YouTube downloader API returned HTTP ${response.status}.`,
+      );
+    }
+    await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
     const audio = createReadStream(outputPath);
     const cleanup = () => {
       void rm(directory, { recursive: true, force: true });
@@ -151,78 +133,12 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     await rm(directory, { recursive: true, force: true });
     throw error;
   }
-
-  async function createCookiesFile(
-    setting: string,
-    directory: string,
-  ): Promise<string> {
-    const trimmed = setting.trim();
-
-    if (trimmed.startsWith("/") || trimmed.startsWith(".") || trimmed.startsWith("~")) {
-      try {
-        const fileContent = await readFile(trimmed, "utf8");
-        const normalized = fileContent.trim();
-        if (normalized.startsWith("[") || normalized.startsWith("{")) {
-          return writeCookiesJson(normalized, directory);
-        }
-        return trimmed;
-      } catch {
-        return trimmed;
-      }
-    }
-
-    if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
-      return trimmed;
-    }
-
-    return writeCookiesJson(trimmed, directory);
-  }
-
-  async function writeCookiesJson(
-    jsonText: string,
-    directory: string,
-  ): Promise<string> {
-    const parsed: unknown = JSON.parse(jsonText);
-    if (!Array.isArray(parsed)) {
-      throw new Error("YouTube cookies JSON must be an array.");
-    }
-
-    const lines = [
-      "# Netscape HTTP Cookie File",
-      ...parsed.map((item) => {
-        if (!item || typeof item !== "object") {
-          throw new Error("Invalid YouTube cookie entry.");
-        }
-        const cookie = item as Record<string, unknown>;
-        const domain = String(cookie.domain ?? "");
-        const path = String(cookie.path ?? "/");
-        const name = String(cookie.name ?? "");
-        const value = String(cookie.value ?? "");
-        if (!domain || !name) {
-          throw new Error("YouTube cookie is missing domain or name.");
-        }
-        const includeSubdomains = domain.startsWith(".") ? "TRUE" : "FALSE";
-        const secure = cookie.secure === true ? "TRUE" : "FALSE";
-        const expiry =
-          typeof cookie.expirationDate === "number"
-            ? Math.floor(cookie.expirationDate)
-            : 0;
-        return [domain, includeSubdomains, path, secure, expiry, name, value].join(
-          "\t",
-        );
-      }),
-      "",
-    ];
-    const filePath = join(directory, "cookies.txt");
-    await writeFile(filePath, lines.join("\n"), "utf8");
-    return filePath;
-  }
 }
 
 /**
  * Retries an async operation with exponential backoff.
- * Useful for transient 429 (Too Many Requests) errors.
- * yt-dlp errors that are not transient are returned immediately.
+ * Useful for transient downloader API/network errors.
+ * Non-transient errors are returned immediately.
  */
 export async function withRetry<T>(
   fn: () => Promise<T>,
