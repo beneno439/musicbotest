@@ -25,6 +25,7 @@ export interface Track {
   thumbnail: string;
   watchUrl: string;
   downloadUrl?: string;
+  duration: string;
 }
 
 const cache = new Map<string, Track>();
@@ -52,7 +53,17 @@ function toTrack(item: SearchResult): Track | null {
     thumbnail: getThumbnail(videoId, item.thumbnail?.thumbnails),
     watchUrl: youtubeWatchUrl(videoId),
     downloadUrl: youtubeWatchUrl(videoId),
+    duration: formatDuration(item.lengthSeconds ?? item.length?.simpleText),
   };
+}
+
+function formatDuration(value: number | string | undefined): string {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  const seconds = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return "?:??";
+  const total = Math.floor(seconds);
+  const minutes = Math.floor(total / 60);
+  return `${minutes}:${String(total % 60).padStart(2, "0")}`;
 }
 
 export async function getTrackByVideoId(
@@ -71,6 +82,7 @@ export async function getTrackByVideoId(
     artist,
     thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
     watchUrl: youtubeWatchUrl(videoId),
+    duration: "?:??",
   };
   cache.set(key, track);
   return track;

@@ -48,7 +48,8 @@ async function showSearchResults(ctx: Context, query: string): Promise<void> {
   }
   const keyboard = new InlineKeyboard();
   for (const [index, result] of tracks.entries()) {
-    const label = `${index + 1}. ${result.title}`.slice(0, 60);
+    const title = result.title.slice(0, 48);
+    const label = `${index + 1}. ${title} (${result.duration})`;
     keyboard.text(label, `track:${result.videoId}`).row();
   }
   await ctx.reply("🎵 Выберите песню:", { reply_markup: keyboard });

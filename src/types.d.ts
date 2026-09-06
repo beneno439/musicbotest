@@ -4,6 +4,8 @@ declare module "youtube-search-api" {
     type?: string;
     title?: string;
     channelTitle?: string;
+    lengthSeconds?: number | string;
+    length?: { simpleText?: string };
     thumbnail?: {
       thumbnails?: Array<{ url: string; width?: number; height?: number }>;
     };
