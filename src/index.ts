@@ -18,7 +18,7 @@ import {
 } from "./utils/helpers.js";
 import { getAlbumInfo } from "./services/itunes.service.js";
 import { findLyrics } from "./services/lyrics.service.js";
-import { recognizeTelegramAudio } from "./services/recognition.service.js";
+import { transcribeTelegramMedia } from "./services/recognition.service.js";
 
 const token = process.env.BOT_TOKEN;
 if (!token || token === "YOUR_TELEGRAM_BOT_TOKEN") {
@@ -56,21 +56,15 @@ async function showSearchResults(ctx: Context, query: string): Promise<void> {
   await ctx.reply("🎵 Выберите песню:", { reply_markup: keyboard });
 }
 
-async function recognizeAndSearch(ctx: Context, fileId: string): Promise<void> {
+async function transcribeAndSearch(ctx: Context, fileId: string): Promise<void> {
   await ctx.replyWithChatAction("typing");
-  try {
-    const recognized = await recognizeTelegramAudio(ctx, fileId);
-    if (!recognized) {
-      await ctx.reply(
-        "🔍 Не удалось распознать песню. Отправьте более длинный и чистый фрагмент.",
-      );
-      return;
-    }
-    await ctx.reply(`🎧 Похоже на: ${recognized.artist} — ${recognized.title}`);
-    await showSearchResults(ctx, `${recognized.artist} ${recognized.title}`);
-  } catch (error) {
-    console.error(error);
+  const text = await transcribeTelegramMedia(ctx, fileId);
+  if (!text) {
+    await ctx.reply("🔍 Не удалось получить текст. Отправьте аудио или видео ещё раз.");
+    return;
   }
+  await ctx.reply(`📝 Распознанный текст:\n${text}`);
+  await showSearchResults(ctx, text);
 }
 
 async function sendTrack(ctx: Context, track: Track): Promise<void> {
@@ -164,7 +158,7 @@ bot.command("start", async (ctx) => {
   await ctx.reply(
     "👋 Привет!\nЯ помогу найти музыку 🎶, отправь мне что-то из этого:\n\n" +
       "🎵 Название песни или исполнителя\n🔤 Слова из песни\n🎙 Голосовое сообщение с музыкой\n" +
-      "📹 Видео с музыкой (не умеем)\n🔊 Аудиозапись\n🎥 Видеосообщение с музыкой(не умеем)\n" +
+      "📹 Видео с музыкой\n🔊 Аудиозапись\n🎥 Видеосообщение с музыкой\n" +
       "🔗 Ссылку на Instagram, TikTok, YouTube и другие сайты\n\n🕺 Наслаждайся!",
   );
 });
@@ -197,15 +191,18 @@ bot.on("message:text", async (ctx) => {
   await sendTrack(ctx, track);
 });
 
-bot.on(["message:audio", "message:voice"], async (ctx) => {
-  const fileId = ctx.message.audio?.file_id ?? ctx.message.voice?.file_id;
+bot.on(["message:audio", "message:voice", "message:video"], async (ctx) => {
+  const fileId =
+    ctx.message.audio?.file_id ??
+    ctx.message.voice?.file_id ??
+    ctx.message.video?.file_id;
   if (!fileId) return;
   try {
-    await recognizeAndSearch(ctx, fileId);
+    await transcribeAndSearch(ctx, fileId);
   } catch (error) {
-    console.error("Audio recognition failed:", error);
+    console.error("Media transcription failed:", error);
     await ctx.reply(
-      "⚠️ Не удалось распознать аудио. Проверьте настройку AUDD_API_TOKEN и отправьте фрагмент ещё раз.",
+      "⚠️ Не удалось преобразовать медиа в текст. Проверьте локальную модель Whisper и отправьте файл ещё раз.",
     );
   }
 });

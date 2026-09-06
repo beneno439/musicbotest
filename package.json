@@ -12,6 +12,8 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
     "@grammyjs/parse-mode": "github:grammyjs/parse-mode",
+    "@xenova/transformers": "^2.17.2",
+    "audio-decode": "^3.12.0",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",
     "youtube-search-api": "^1.2.0"
