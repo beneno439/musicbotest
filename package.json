@@ -2,6 +2,7 @@
   "name": "telegram-music-search-bot",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "description": "Telegram music search bot built with grammY and YouTube search",
   "main": "dist/index.js",
   "scripts": {
