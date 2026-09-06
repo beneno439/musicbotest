@@ -68,15 +68,25 @@ async function recognizeAndSearch(ctx: Context, fileId: string): Promise<void> {
 async function sendTrack(ctx: Context, track: Track): Promise<void> {
   await ctx.replyWithChatAction("upload_photo");
 
+  const linksPromise =
+    track.source === "soundcloud"
+      ? Promise.resolve({
+          songLink: track.watchUrl,
+          youtube: `https://www.youtube.com/results?search_query=${encodeURIComponent(`${track.artist} ${track.title}`)}`,
+          youtubeMusic: `https://music.youtube.com/search?q=${encodeURIComponent(`${track.artist} ${track.title}`)}`,
+          spotify: `https://open.spotify.com/search/${encodeURIComponent(`${track.artist} ${track.title}`)}`,
+        })
+      : getAlternativeLinks(track.watchUrl, `${track.artist} ${track.title}`);
   const [album, links] = await Promise.all([
     getAlbumInfo(track.title, track.artist),
-    getAlternativeLinks(track.watchUrl, `${track.artist} ${track.title}`),
+    linksPromise,
   ]);
   const photo = album?.artworkUrl ?? track.thumbnail;
   const albumLine = album?.albumName
     ? `\n💿 ${escapeHtml(album.albumName)}`
     : "";
-  const caption = `🎵 ${escapeHtml(track.title)} — ${escapeHtml(track.artist)}${albumLine}\n\n${track.watchUrl}`;
+  const sourceLine = track.source === "soundcloud" ? "☁️ SoundCloud" : "▶️ YouTube";
+  const caption = `🎵 ${escapeHtml(track.title)} — ${escapeHtml(track.artist)}${albumLine}\n${sourceLine}\n\n${track.watchUrl}`;
 
   const keyboard = new InlineKeyboard()
     .url("▶️ YouTube", links.youtube)

@@ -19,6 +19,8 @@ export interface Track {
   artist: string;
   thumbnail: string;
   watchUrl: string;
+  downloadUrl?: string;
+  source?: "youtube" | "soundcloud";
 }
 
 const cache = new Map<string, Track>();
@@ -50,16 +52,55 @@ function toTrack(item: SearchResult): Track | null {
     artist,
     thumbnail: getThumbnail(videoId, item.thumbnail?.thumbnails),
     watchUrl: youtubeWatchUrl(videoId),
+    downloadUrl: youtubeWatchUrl(videoId),
+    source: "youtube",
   };
+}
+
+interface YtDlpSearchEntry {
+  id?: string;
+  title?: string;
+  uploader?: string;
+  channel?: string;
+  webpage_url?: string;
+  url?: string;
+  thumbnail?: string;
+}
+
+async function searchSoundCloud(query: string, limit: number): Promise<Track[]> {
+  const output = await ytdlp.execPromise([
+    `scsearch${Math.max(limit, 1)}:${query}`,
+    "--flat-playlist",
+    "--dump-single-json",
+    "--skip-download",
+    "--quiet",
+    "--no-warnings",
+  ]);
+  const data = JSON.parse(output) as { entries?: YtDlpSearchEntry[] };
+  return (data.entries ?? []).flatMap((entry) => {
+    const id = entry.id?.trim();
+    const title = entry.title?.trim();
+    const url = entry.webpage_url || entry.url;
+    if (!id || !title || !url) return [];
+    return [{
+      videoId: `sc_${id}`,
+      title,
+      artist: (entry.uploader || entry.channel || "SoundCloud").trim(),
+      thumbnail: entry.thumbnail || "",
+      watchUrl: url,
+      downloadUrl: url,
+      source: "soundcloud" as const,
+    }];
+  });
 }
 
 export async function getTrackByVideoId(
   videoId: string,
 ): Promise<Track | null> {
-  if (!canReadVideoInfo(videoId) || blockList(videoId)) return null;
   const key = `id:${videoId}`;
   const cached = cache.get(key);
   if (cached) return cached;
+  if (!canReadVideoInfo(videoId) || blockList(videoId)) return null;
 
   let title = videoId;
   let artist = "YouTube";
@@ -85,7 +126,7 @@ export async function searchTracks(query: string, limit = 6): Promise<Track[]> {
   if (cached) return [cached];
 
   // youtube-search-api expects a boolean, result limit, and an options array.
-  const result = await GetListByKeyword(query, false, Math.max(limit, 1), [
+  const result = await GetListByKeyword(query, false, Math.max(Math.ceil(limit / 2), 1), [
     { type: "video" },
   ]);
   const tracks: Track[] = [];
@@ -97,19 +138,30 @@ export async function searchTracks(query: string, limit = 6): Promise<Track[]> {
       if (tracks.length >= limit) break;
     }
   }
-  if (tracks.length > 0) cache.set(key, tracks[0]);
-  return tracks;
+  let soundCloudTracks: Track[] = [];
+  try {
+    soundCloudTracks = await searchSoundCloud(query, Math.max(Math.floor(limit / 2), 1));
+    for (const track of soundCloudTracks) {
+      cache.set(`id:${track.videoId}`, track);
+    }
+  } catch (error) {
+    console.warn("SoundCloud search failed; using YouTube results only.", error);
+  }
+  const combined = [...tracks, ...soundCloudTracks].slice(0, limit);
+  if (combined.length > 0) cache.set(key, combined[0]);
+  return combined;
 }
 
 export async function getAudioStream(videoId: string): Promise<Readable> {
-  if (!canReadVideoInfo(videoId) || blockList(videoId)) {
+  const track = cache.get(`id:${videoId}`);
+  if ((!track && !canReadVideoInfo(videoId)) || blockList(videoId)) {
     throw new Error("The requested video cannot be downloaded.");
   }
 
   const directory = await mkdtemp(join(tmpdir(), "music-bot-"));
   const outputPath = join(directory, `${videoId}.mp3`);
   const args = [
-    `https://www.youtube.com/watch?v=${videoId}`,
+    track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
     "--format", "bestaudio/best",
     "--extract-audio",
     "--audio-format", "mp3",
@@ -119,8 +171,10 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     "--no-part",
     "--quiet",
     "--js-runtimes", "node",
-    "--extractor-args", "youtube:player_client=tv,web",
   ];
+  if (!track || track.source === "youtube") {
+    args.push("--js-runtimes", "node", "--extractor-args", "youtube:player_client=tv,web");
+  }
   const cookiesSetting =
     process.env.YOUTUBE_COOKIES_FILE || process.env.YOUTUBE_COOKIES_JSON;
   const proxy = process.env.YOUTUBE_PROXY;
