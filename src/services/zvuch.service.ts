@@ -16,10 +16,21 @@ const BASE_URL = process.env.ZVUCH_BASE_URL?.trim() || DEFAULT_BASE_URL;
 
 const REQUEST_HEADERS = {
   "User-Agent":
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-  Referer: BASE_URL,
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+  Accept:
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+  "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+  "Cache-Control": "max-age=0",
+  "Sec-Ch-Ua":
+    '"Not)A;Brand";v="99", "Google Chrome";v="127", "Chromium";v="127"',
+  "Sec-Ch-Ua-Mobile": "?0",
+  "Sec-Ch-Ua-Platform": '"Windows"',
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "same-origin",
+  "Sec-Fetch-User": "?1",
+  "Upgrade-Insecure-Requests": "1",
+  Referer: "https://google.com/",
 };
 
 // Простой транслитератор для кириллицы в латиницу для формирования URL slug
@@ -75,11 +86,9 @@ export async function searchZvuchTracks(
 
   const slug = buildTrackSlug(normalized);
   const searchUrls = [
-    `${BASE_URL}/tracks/${slug}?search=1`,
     `${BASE_URL}/tracks/${slug}`,
-    `${BASE_URL}/?s=${encodeURIComponent(normalized)}`,
     `${BASE_URL}/search/${encodeURIComponent(normalized)}/`,
-    `${BASE_URL}/tracks?q=${encodeURIComponent(normalized)}`,
+    `${BASE_URL}/?s=${encodeURIComponent(normalized)}`,
   ];
 
   const seen = new Set<string>();
@@ -87,15 +96,38 @@ export async function searchZvuchTracks(
     if (seen.has(url)) continue;
     seen.add(url);
 
+    console.log(`[Zvuch Debug] Отправляем запрос на: ${url}`);
+
     try {
       const response = await fetch(url, { headers: REQUEST_HEADERS });
+      console.log(
+        `[Zvuch Debug] Статус ответа: ${response.status} ${response.statusText}`,
+      );
+
       if (!response.ok) continue;
+
       const html = await response.text();
+      console.log(
+        `[Zvuch Debug] Длина полученного HTML: ${html.length} символов`,
+      );
+
+      // Выведем кусочек HTML, чтобы понять, это капча/Cloudflare или реальный сайт
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      console.log(
+        `[Zvuch Debug] Заголовок страницы (Title): ${titleMatch ? titleMatch[1] : "Не найден"}`,
+      );
+
       const $ = load(html);
       const tracks = parseTracksFromHtml($, url, limit);
+
+      console.log(`[Zvuch Debug] Найдено треков на странице: ${tracks.length}`);
+
       if (tracks.length > 0) return tracks;
-    } catch {
-      // Игнорируем ошибки сети для fallback ссылок
+    } catch (error) {
+      console.error(
+        `[Zvuch Debug] Ошибка при запросе ${url}:`,
+        (error as Error).message,
+      );
     }
   }
 
