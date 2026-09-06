@@ -18,7 +18,7 @@ import {
 } from "./utils/helpers.js";
 import { getAlbumInfo } from "./services/itunes.service.js";
 import { findLyrics } from "./services/lyrics.service.js";
-import { transcribeTelegramMedia } from "./services/recognition.service.js";
+import { recognizeTelegramMedia } from "./services/recognition.service.js";
 
 const token = process.env.BOT_TOKEN;
 if (!token || token === "YOUR_TELEGRAM_BOT_TOKEN") {
@@ -56,15 +56,15 @@ async function showSearchResults(ctx: Context, query: string): Promise<void> {
   await ctx.reply("🎵 Выберите песню:", { reply_markup: keyboard });
 }
 
-async function transcribeAndSearch(ctx: Context, fileId: string): Promise<void> {
+async function recognizeAndSearch(ctx: Context, fileId: string): Promise<void> {
   await ctx.replyWithChatAction("typing");
-  const text = await transcribeTelegramMedia(ctx, fileId);
-  if (!text) {
-    await ctx.reply("🔍 Не удалось получить текст. Отправьте аудио или видео ещё раз.");
+  const recognized = await recognizeTelegramMedia(ctx, fileId);
+  if (!recognized) {
+    await ctx.reply("🔍 Не удалось определить песню. Отправьте более чистый фрагмент.");
     return;
   }
-  await ctx.reply(`📝 Распознанный текст:\n${text}`);
-  await showSearchResults(ctx, text);
+  await ctx.reply(`🎧 Найдено: ${recognized.artist} — ${recognized.title}`);
+  await showSearchResults(ctx, `${recognized.artist} ${recognized.title}`);
 }
 
 async function sendTrack(ctx: Context, track: Track): Promise<void> {
@@ -198,11 +198,11 @@ bot.on(["message:audio", "message:voice", "message:video"], async (ctx) => {
     ctx.message.video?.file_id;
   if (!fileId) return;
   try {
-    await transcribeAndSearch(ctx, fileId);
+    await recognizeAndSearch(ctx, fileId);
   } catch (error) {
-    console.error("Media transcription failed:", error);
+    console.error("ACRCloud recognition failed:", error);
     await ctx.reply(
-      "⚠️ Не удалось преобразовать медиа в текст. Проверьте локальную модель Whisper и отправьте файл ещё раз.",
+      "⚠️ Не удалось определить песню. Проверьте настройки ACRCloud и отправьте файл ещё раз.",
     );
   }
 });

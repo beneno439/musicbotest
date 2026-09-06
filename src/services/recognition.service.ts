@@ -1,47 +1,48 @@
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
+import { createHmac } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import decode from "audio-decode";
-import { pipeline } from "@xenova/transformers";
 import type { Context } from "grammy";
 
-interface TranscriptionResult {
-  text?: string;
+interface AcrCloudResponse {
+  status?: { code?: number; msg?: string };
+  metadata?: {
+    music?: Array<{
+      title?: string;
+      artists?: Array<{ name?: string }>;
+    }>;
+  };
 }
 
-type Transcriber = (
-  audio: Float32Array,
-  options: { chunk_length_s: number; stride_length_s: number },
-) => Promise<TranscriptionResult>;
-
-let transcriberPromise: Promise<Transcriber> | null = null;
-let transcriptionQueue: Promise<unknown> = Promise.resolve();
-
-export async function transcribeTelegramMedia(
-  ctx: Context,
-  fileId: string,
-): Promise<string | null> {
-  const job = transcriptionQueue.then(() => transcribeMedia(ctx, fileId));
-  transcriptionQueue = job.catch(() => undefined);
-  return job;
+export interface RecognizedTrack {
+  artist: string;
+  title: string;
 }
 
-async function transcribeMedia(
+export async function recognizeTelegramMedia(
   ctx: Context,
   fileId: string,
-): Promise<string | null> {
-  const directory = await mkdtemp(join(tmpdir(), "music-transcription-"));
+): Promise<RecognizedTrack | null> {
+  const host = process.env.ACRCLOUD_HOST?.trim();
+  const accessKey = process.env.ACRCLOUD_ACCESS_KEY?.trim();
+  const accessSecret = process.env.ACRCLOUD_ACCESS_SECRET?.trim();
+  if (!host || !accessKey || !accessSecret) {
+    throw new Error(
+      "ACRCLOUD_HOST, ACRCLOUD_ACCESS_KEY and ACRCLOUD_ACCESS_SECRET are required.",
+    );
+  }
+
+  const directory = await mkdtemp(join(tmpdir(), "music-recognition-"));
   try {
     const file = await ctx.api.getFile(fileId);
     if (!file.file_path) {
       throw new Error("Telegram did not provide a media file path.");
     }
-    const maxBytes = Number(process.env.MAX_TRANSCRIPTION_BYTES || 25_000_000);
+    const maxBytes = Number(process.env.MAX_RECOGNITION_BYTES || 25_000_000);
     if (file.file_size && file.file_size > maxBytes) {
-      throw new Error(
-        `Media file is too large for local transcription (maximum ${maxBytes} bytes).`,
-      );
+      throw new Error(`Media file exceeds the ${maxBytes}-byte recognition limit.`);
     }
+
     const extension = file.file_path.includes(".")
       ? file.file_path.slice(file.file_path.lastIndexOf("."))
       : ".bin";
@@ -54,51 +55,70 @@ async function transcribeMedia(
     }
     await writeFile(mediaPath, Buffer.from(await download.arrayBuffer()));
 
-    const decoded = await decode(await readFile(mediaPath));
-    const audio = toMono16k(decoded);
-    const transcriber = await getTranscriber();
-    const result = await transcriber(audio, {
-      chunk_length_s: 30,
-      stride_length_s: 5,
-    });
-    return result.text?.trim() || null;
+    const result = await identifyWithAcrCloud(
+      host,
+      accessKey,
+      accessSecret,
+      await readFile(mediaPath),
+      `input${extension}`,
+    );
+    const music = result.metadata?.music?.[0];
+    const title = music?.title?.trim();
+    const artist = music?.artists
+      ?.map((item) => item.name?.trim())
+      .filter((name): name is string => Boolean(name))
+      .join(", ");
+    return title && artist ? { title, artist } : null;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 }
 
-async function getTranscriber(): Promise<Transcriber> {
-  if (!transcriberPromise) {
-    transcriberPromise = pipeline(
-      "automatic-speech-recognition",
-      process.env.WHISPER_MODEL || "Xenova/whisper-tiny",
-      { quantized: true },
-    ) as Promise<Transcriber>;
-  }
-  return transcriberPromise;
-}
+async function identifyWithAcrCloud(
+  host: string,
+  accessKey: string,
+  accessSecret: string,
+  contents: Buffer,
+  filename: string,
+): Promise<AcrCloudResponse> {
+  const httpMethod = "POST";
+  const uri = "/v1/identify";
+  const dataType = "audio";
+  const signatureVersion = "1";
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const signature = createHmac("sha1", accessSecret)
+    .update(
+      [httpMethod, uri, accessKey, dataType, signatureVersion, timestamp].join("\n"),
+    )
+    .digest("base64");
 
-function toMono16k(audio: {
-  sampleRate: number;
-  channelData: Float32Array[];
-}): Float32Array {
-  const mono = new Float32Array(audio.channelData[0]?.length ?? 0);
-  for (const channel of audio.channelData) {
-    for (let index = 0; index < mono.length; index += 1) {
-      mono[index] += (channel[index] ?? 0) / audio.channelData.length;
-    }
-  }
-  if (audio.sampleRate === 16000) return mono;
+  const form = new FormData();
+  form.append("access_key", accessKey);
+  form.append("sample_bytes", contents.byteLength.toString());
+  form.append("timestamp", timestamp);
+  form.append("signature", signature);
+  form.append("data_type", dataType);
+  form.append("signature_version", signatureVersion);
+  form.append("sample", new Blob([new Uint8Array(contents)]), filename);
 
-  const outputLength = Math.max(1, Math.round(mono.length * 16000 / audio.sampleRate));
-  const output = new Float32Array(outputLength);
-  const scale = audio.sampleRate / 16000;
-  for (let index = 0; index < output.length; index += 1) {
-    const sourceIndex = index * scale;
-    const left = Math.floor(sourceIndex);
-    const right = Math.min(left + 1, mono.length - 1);
-    const weight = sourceIndex - left;
-    output[index] = (mono[left] ?? 0) * (1 - weight) + (mono[right] ?? 0) * weight;
+  const response = await fetch(`https://${host}${uri}`, {
+    method: httpMethod,
+    body: form,
+  });
+  const body = await response.text();
+  let payload: AcrCloudResponse;
+  try {
+    payload = JSON.parse(body) as AcrCloudResponse;
+  } catch {
+    throw new Error(`ACRCloud returned invalid JSON: ${body.slice(0, 300)}`);
   }
-  return output;
+  if (!response.ok) {
+    throw new Error(`ACRCloud request failed with HTTP ${response.status}.`);
+  }
+  if (payload.status?.code !== 0) {
+    throw new Error(
+      `ACRCloud could not recognize the media: ${payload.status?.msg || "unknown error"}.`,
+    );
+  }
+  return payload;
 }
