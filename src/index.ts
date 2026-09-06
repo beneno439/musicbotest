@@ -97,6 +97,7 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   });
 
   try {
+    await ctx.reply("⏳ Скачиваю аудио, это может занять некоторое время...");
     // Keep retries for transient yt-dlp/network failures.
     const audio = await withRetry(() => getAudioStream(track.videoId), {
       retries: 3,
@@ -141,6 +142,7 @@ bot.callbackQuery(/^lyrics:(.+)$/, async (ctx) => {
 
 bot.callbackQuery(/^track:(.+)$/, async (ctx) => {
   await ctx.answerCallbackQuery("Загружаю выбранную песню...");
+  await ctx.reply("⏳ Вы выбрали трек. Начинаю загрузку аудио...");
   const track = await getTrackByVideoId(ctx.match[1]);
   if (!track) {
     await ctx.reply("⚠️ Не удалось найти выбранную песню заново.");
