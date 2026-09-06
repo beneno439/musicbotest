@@ -77,7 +77,8 @@ function transliterate(text: string): string {
     .join("");
 }
 
-import puppeteer from "puppeteer-extra";
+import _puppeteer from "puppeteer-extra";
+const puppeteer = _puppeteer as any;
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
 // Активируем плагин скрытности
@@ -117,7 +118,7 @@ export async function searchZvuchTracks(
 
     // Блокируем тяжелые ресурсы (картинки, стили, шрифты), оставляем только HTML и JS
     await page.setRequestInterception(true);
-    page.on("request", (req) => {
+    page.on("request", (req: any) => {
       if (
         ["image", "stylesheet", "font", "media"].includes(req.resourceType())
       ) {
