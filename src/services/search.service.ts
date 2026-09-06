@@ -244,16 +244,19 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
 
     let downloadUrl = apifyAudioCache.get(videoId);
     if (!downloadUrl) {
-      downloadUrl = await createApifyDownload(
-        track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
-      );
+      const fallbackQuery = track ? `${track.artist} ${track.title}` : `youtube ${videoId}`;
+      const zvuchUrl = await findZvuchAudioUrl(fallbackQuery);
+      if (!zvuchUrl) {
+        throw new Error("No direct audio source is available for this track.");
+      }
+      downloadUrl = zvuchUrl;
       apifyAudioCache.set(videoId, downloadUrl);
     }
     const response = await fetch(downloadUrl);
     if (!response.ok) {
       apifyAudioCache.delete(videoId);
       throw new Error(
-        `Apify Storage file request returned HTTP ${response.status}.`,
+        `Audio file request returned HTTP ${response.status}.`,
       );
     }
     const contents = Buffer.from(await response.arrayBuffer());
@@ -274,6 +277,39 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     throw error;
   }
 
+}
+
+async function findZvuchAudioUrl(query: string): Promise<string | null> {
+  const searchUrls = [
+    `https://wwv.zvuch.com/?s=${encodeURIComponent(query)}`,
+    `https://wwv.zvuch.com/search/${encodeURIComponent(query)}/`,
+  ];
+
+  for (const url of searchUrls) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
+        },
+      });
+      if (!response.ok) continue;
+      const html = await response.text();
+      const matches = [
+        ...html.matchAll(/https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|aac|wav|ogg)(?:\?[^\s"'<>]*)?/gi),
+        ...html.matchAll(/(?:file|src|href|data-src|data-url)\s*[:=]\s*["']?(https?:\/\/[^"'\s<>]+)(?:["']|\s|>)/gi),
+      ];
+      const candidate = matches
+        .map((match) => match[0].replace(/^['"]+|['"]+$/g, ""))
+        .find((value) => /zvuch\.com|mp3|m4a|aac|wav|ogg/i.test(value));
+      if (candidate) return candidate;
+    } catch {
+      // If the site blocks requests from the server, fall through to the next source.
+    }
+  }
+
+  return null;
 }
 
 function createB2Client(): S3Client | null {
@@ -334,147 +370,6 @@ function createAudioStream(outputPath: string, directory: string): Readable {
   audio.once("close", cleanup);
   audio.once("error", cleanup);
   return audio;
-}
-
-async function createApifyDownload(videoUrl: string): Promise<string> {
-  const apiKey = process.env.APIFY_API_TOKEN;
-  if (!apiKey) {
-    throw new Error("APIFY_API_TOKEN is not configured.");
-  }
-  const actorId =
-    process.env.APIFY_ACTOR_ID || "streamers~youtube-video-downloader";
-  const runUrl = new URL(`https://api.apify.com/v2/acts/${actorId}/runs`);
-  runUrl.searchParams.set("token", apiKey);
-  runUrl.searchParams.set("waitForFinish", "300");
-  const runResponse = await fetch(runUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      videos: [{ url: videoUrl }],
-      storeInKVStore: true,
-      preferredFormat: "mp3",
-      filenameTemplateParts: ["title"],
-    }),
-  });
-  const runBody = await runResponse.text();
-  let runPayload: {
-    data?: { id?: string; status?: string; defaultDatasetId?: string };
-    error?: { message?: string };
-  } = {};
-  try {
-    runPayload = JSON.parse(runBody) as typeof runPayload;
-  } catch {
-    // Preserve the raw response in the error below.
-  }
-  if (!runResponse.ok || !runPayload.data?.id) {
-    throw new Error(
-      `Apify Actor failed: ${
-        runPayload.error?.message ||
-        runBody.slice(0, 300) ||
-        `HTTP ${runResponse.status}`
-      }`,
-    );
-  }
-  const run = await waitForApifyRun(
-    runPayload.data.id,
-    apiKey,
-    runPayload.data.defaultDatasetId,
-  );
-
-  const datasetUrl = new URL(
-    `https://api.apify.com/v2/datasets/${run.defaultDatasetId}/items`,
-  );
-  datasetUrl.searchParams.set("token", apiKey);
-  datasetUrl.searchParams.set("clean", "1");
-  const datasetResponse = await fetch(datasetUrl);
-  const datasetBody = await datasetResponse.text();
-  if (!datasetResponse.ok) {
-    throw new Error(
-      `Apify dataset request failed: HTTP ${datasetResponse.status} ${datasetBody.slice(0, 300)}`,
-    );
-  }
-  let dataset: unknown;
-  try {
-    dataset = JSON.parse(datasetBody);
-  } catch {
-    throw new Error(`Apify returned invalid dataset JSON: ${datasetBody.slice(0, 300)}`);
-  }
-  const downloadUrl = findDownloadUrl(dataset);
-  if (!downloadUrl) {
-    throw new Error(
-      "Apify Actor completed but returned no downloadable MP3 URL. The Actor may not support audio-only output.",
-    );
-  }
-  return downloadUrl;
-}
-
-async function waitForApifyRun(
-  runId: string,
-  apiKey: string,
-  initialDatasetId?: string,
-): Promise<{ defaultDatasetId: string }> {
-  const deadline = Date.now() + 5 * 60 * 1000;
-  while (Date.now() < deadline) {
-    const statusUrl = new URL(`https://api.apify.com/v2/actor-runs/${runId}`);
-    statusUrl.searchParams.set("token", apiKey);
-    const response = await fetch(statusUrl);
-    const body = await response.text();
-    let payload: {
-      data?: {
-        status?: string;
-        defaultDatasetId?: string;
-      };
-      error?: { message?: string };
-    } = {};
-    try {
-      payload = JSON.parse(body) as typeof payload;
-    } catch {
-      throw new Error(`Apify status returned invalid JSON: ${body.slice(0, 300)}`);
-    }
-    if (!response.ok || !payload.data) {
-      throw new Error(
-        `Apify status request failed: ${
-          payload.error?.message || body.slice(0, 300) || `HTTP ${response.status}`
-        }`,
-      );
-    }
-    const status = payload.data.status;
-    if (status === "SUCCEEDED") {
-      const defaultDatasetId = payload.data.defaultDatasetId || initialDatasetId;
-      if (!defaultDatasetId) {
-        throw new Error("Apify completed without a dataset.");
-      }
-      return { defaultDatasetId };
-    }
-    if (status === "FAILED" || status === "ABORTED" || status === "TIMED-OUT") {
-      throw new Error(`Apify Actor finished with status ${status}.`);
-    }
-    await sleep(2000);
-  }
-  throw new Error("Apify Actor timed out while preparing the audio.");
-}
-
-function findDownloadUrl(value: unknown): string | null {
-  if (typeof value === "string") {
-    try {
-      const url = new URL(value);
-      return /\.(mp3|m4a|aac|ogg|opus|wav)(?:$|[?#])/i.test(url.pathname)
-        ? url.toString()
-        : null;
-    } catch {
-      return null;
-    }
-  }
-  if (Array.isArray(value)) {
-    return value.map(findDownloadUrl).find((url): url is string => Boolean(url)) ?? null;
-  }
-  if (value && typeof value === "object") {
-    for (const item of Object.values(value)) {
-      const url = findDownloadUrl(item);
-      if (url) return url;
-    }
-  }
-  return null;
 }
 
 /**
