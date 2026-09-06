@@ -164,7 +164,7 @@ async function createApifyDownload(videoUrl: string): Promise<string> {
   });
   const runBody = await runResponse.text();
   let runPayload: {
-    data?: { status?: string; defaultDatasetId?: string };
+    data?: { id?: string; status?: string; defaultDatasetId?: string };
     error?: { message?: string };
   } = {};
   try {
@@ -172,8 +172,7 @@ async function createApifyDownload(videoUrl: string): Promise<string> {
   } catch {
     // Preserve the raw response in the error below.
   }
-  const run = runPayload.data;
-  if (!runResponse.ok || !run?.defaultDatasetId || run.status !== "SUCCEEDED") {
+  if (!runResponse.ok || !runPayload.data?.id) {
     throw new Error(
       `Apify Actor failed: ${
         runPayload.error?.message ||
@@ -182,6 +181,11 @@ async function createApifyDownload(videoUrl: string): Promise<string> {
       }`,
     );
   }
+  const run = await waitForApifyRun(
+    runPayload.data.id,
+    apiKey,
+    runPayload.data.defaultDatasetId,
+  );
 
   const datasetUrl = new URL(
     `https://api.apify.com/v2/datasets/${run.defaultDatasetId}/items`,
@@ -208,6 +212,52 @@ async function createApifyDownload(videoUrl: string): Promise<string> {
     );
   }
   return downloadUrl;
+}
+
+async function waitForApifyRun(
+  runId: string,
+  apiKey: string,
+  initialDatasetId?: string,
+): Promise<{ defaultDatasetId: string }> {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const statusUrl = new URL(`https://api.apify.com/v2/actor-runs/${runId}`);
+    statusUrl.searchParams.set("token", apiKey);
+    const response = await fetch(statusUrl);
+    const body = await response.text();
+    let payload: {
+      data?: {
+        status?: string;
+        defaultDatasetId?: string;
+      };
+      error?: { message?: string };
+    } = {};
+    try {
+      payload = JSON.parse(body) as typeof payload;
+    } catch {
+      throw new Error(`Apify status returned invalid JSON: ${body.slice(0, 300)}`);
+    }
+    if (!response.ok || !payload.data) {
+      throw new Error(
+        `Apify status request failed: ${
+          payload.error?.message || body.slice(0, 300) || `HTTP ${response.status}`
+        }`,
+      );
+    }
+    const status = payload.data.status;
+    if (status === "SUCCEEDED") {
+      const defaultDatasetId = payload.data.defaultDatasetId || initialDatasetId;
+      if (!defaultDatasetId) {
+        throw new Error("Apify completed without a dataset.");
+      }
+      return { defaultDatasetId };
+    }
+    if (status === "FAILED" || status === "ABORTED" || status === "TIMED-OUT") {
+      throw new Error(`Apify Actor finished with status ${status}.`);
+    }
+    await sleep(2000);
+  }
+  throw new Error("Apify Actor timed out while preparing the audio.");
 }
 
 function findDownloadUrl(value: unknown): string | null {

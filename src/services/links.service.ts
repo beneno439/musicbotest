@@ -76,10 +76,6 @@ export async function getAlternativeLinks(
     cache.set(youtubeUrl, links);
     return links;
   } catch (error) {
-    console.warn(
-      "Alternative links lookup failed; using fallback links.",
-      error,
-    );
     cache.set(youtubeUrl, fallback);
     return fallback;
   }
