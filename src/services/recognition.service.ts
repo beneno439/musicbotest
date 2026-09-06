@@ -10,6 +10,7 @@ interface AcrCloudResponse {
     music?: Array<{
       title?: string;
       artists?: Array<{ name?: string }>;
+      score?: number;
     }>;
   };
 }
@@ -22,6 +23,7 @@ export interface RecognizedTrack {
 export async function recognizeTelegramMedia(
   ctx: Context,
   fileId: string,
+  hint?: { title?: string; artist?: string },
 ): Promise<RecognizedTrack | null> {
   const host = process.env.ACRCLOUD_HOST?.trim();
   const accessKey = process.env.ACRCLOUD_ACCESS_KEY?.trim();
@@ -62,7 +64,11 @@ export async function recognizeTelegramMedia(
       await readFile(mediaPath),
       `input${extension}`,
     );
-    const music = result.metadata?.music?.[0];
+    const candidates = result.metadata?.music ?? [];
+    const music = [...candidates].sort(
+      (left, right) =>
+        candidateScore(right, hint) - candidateScore(left, hint),
+    )[0];
     const title = music?.title?.trim();
     const artist = music?.artists
       ?.map((item) => item.name?.trim())
@@ -71,6 +77,24 @@ export async function recognizeTelegramMedia(
     return title && artist ? { title, artist } : null;
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+
+  function candidateScore(
+    candidate: {
+      title?: string;
+      artists?: Array<{ name?: string }>;
+      score?: number;
+    },
+    hint?: { title?: string; artist?: string },
+  ): number {
+    const title = candidate.title?.toLowerCase() ?? "";
+    const artists = candidate.artists
+      ?.map((item) => item.name?.toLowerCase() ?? "")
+      .join(" ");
+    let score = candidate.score ?? 0;
+    if (hint?.title && title.includes(hint.title.toLowerCase())) score += 1000;
+    if (hint?.artist && artists?.includes(hint.artist.toLowerCase())) score += 1000;
+    return score;
   }
 }
 

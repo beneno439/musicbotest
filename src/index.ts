@@ -58,7 +58,10 @@ async function showSearchResults(ctx: Context, query: string): Promise<void> {
 
 async function recognizeAndSearch(ctx: Context, fileId: string): Promise<void> {
   await ctx.replyWithChatAction("typing");
-  const recognized = await recognizeTelegramMedia(ctx, fileId);
+  const recognized = await recognizeTelegramMedia(ctx, fileId, {
+    title: ctx.message?.audio?.title,
+    artist: ctx.message?.audio?.performer,
+  });
   if (!recognized) {
     await ctx.reply("🔍 Не удалось определить песню. Отправьте более чистый фрагмент.");
     return;
