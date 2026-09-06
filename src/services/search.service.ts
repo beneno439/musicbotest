@@ -1,16 +1,11 @@
-import { GetListByKeyword, SearchResult } from "youtube-search-api";
 import { createReadStream } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import {
-  canReadVideoInfo,
-  getThumbnail,
-  normalizeQuery,
-  youtubeWatchUrl,
-} from "../utils/helpers.js";
+import { normalizeQuery } from "../utils/helpers.js";
 import { Buffer } from "node:buffer";
+import { getZvuchAudioStream, searchZvuchTracks, type ZvuchTrack } from "./zvuch.service.js";
 import {
   GetObjectCommand,
   HeadObjectCommand,
@@ -46,24 +41,19 @@ export async function recordTrackSelection(videoId: string): Promise<void> {
   await popularityWrite;
 }
 
-function toTrack(item: SearchResult): Track | null {
-  const videoId = item.id;
-  if (!videoId || item.type !== "video" || blockList(videoId)) return null;
-  const title = item.title?.trim();
+function toTrack(item: ZvuchTrack): Track | null {
+  if (blockList(item.id)) return null;
+  const title = item.title.trim();
   if (!title) return null;
-  // отсекаем явно нерелевантные типы контента
-  const lower = title.toLowerCase();
-  if (/\b(live stream|трансляция)\b/i.test(lower)) return null;
 
-  const artist = item.channelTitle?.trim() || "YouTube";
   return {
-    videoId,
+    videoId: item.id,
     title,
-    artist,
-    thumbnail: getThumbnail(videoId, item.thumbnail?.thumbnails),
-    watchUrl: youtubeWatchUrl(videoId),
-    downloadUrl: youtubeWatchUrl(videoId),
-    duration: formatDuration(item.lengthSeconds ?? item.length?.simpleText),
+    artist: item.artist.trim() || "Zvuch",
+    thumbnail: item.thumbnail,
+    watchUrl: item.pageUrl || item.downloadUrl,
+    downloadUrl: item.downloadUrl,
+    duration: item.duration || "?:??",
   };
 }
 
@@ -82,20 +72,8 @@ export async function getTrackByVideoId(
   const key = `id:${videoId}`;
   const cached = cache.get(key);
   if (cached && !Array.isArray(cached)) return cached;
-  if (!canReadVideoInfo(videoId) || blockList(videoId)) return null;
-
-  let title = videoId;
-  let artist = "YouTube";
-  const track: Track = {
-    videoId,
-    title,
-    artist,
-    thumbnail: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`,
-    watchUrl: youtubeWatchUrl(videoId),
-    duration: "?:??",
-  };
-  cache.set(key, track);
-  return track;
+  if (blockList(videoId)) return null;
+  return null;
 }
 
 export async function searchTrack(query: string): Promise<Track | null> {
@@ -110,12 +88,9 @@ export async function searchTracks(query: string, limit = 6): Promise<Track[]> {
     return await sortSearchResults(cached);
   }
 
-  // youtube-search-api expects a boolean, result limit, and an options array.
-  const result = await GetListByKeyword(query, false, Math.max(limit, 1), [
-    { type: "video" },
-  ]);
+  const results = await searchZvuchTracks(query, Math.max(limit, 1));
   const tracks: Track[] = [];
-  for (const item of result.items ?? []) {
+  for (const item of results) {
     const track = toTrack(item);
     if (track) {
       cache.set(`id:${track.videoId}`, track);
@@ -226,8 +201,8 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   const cachedTrack = cache.get(`id:${videoId}`);
   const track =
     cachedTrack && !Array.isArray(cachedTrack) ? cachedTrack : undefined;
-  if ((!track && !canReadVideoInfo(videoId)) || blockList(videoId)) {
-    throw new Error("The requested video cannot be downloaded.");
+  if (!track || blockList(videoId)) {
+    throw new Error("The requested track cannot be downloaded.");
   }
 
   const directory = await mkdtemp(join(tmpdir(), "music-bot-"));
@@ -242,22 +217,20 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
       }
     }
 
-    let downloadUrl = apifyAudioCache.get(videoId);
-    if (!downloadUrl) {
-      const fallbackQuery = track ? `${track.artist} ${track.title}` : `youtube ${videoId}`;
-      const zvuchUrl = await findZvuchAudioUrl(fallbackQuery);
-      if (!zvuchUrl) {
-        throw new Error("No direct audio source is available for this track.");
-      }
-      downloadUrl = zvuchUrl;
-      apifyAudioCache.set(videoId, downloadUrl);
+    const sourceUrl = track?.downloadUrl;
+    if (!sourceUrl) {
+      throw new Error("No direct audio source is available for this track.");
     }
-    const response = await fetch(downloadUrl);
+
+    const response = await fetch(sourceUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        Referer: "https://wwv.zvuch.com",
+      },
+    });
     if (!response.ok) {
-      apifyAudioCache.delete(videoId);
-      throw new Error(
-        `Audio file request returned HTTP ${response.status}.`,
-      );
+      throw new Error(`Audio file request returned HTTP ${response.status}.`);
     }
     const contents = Buffer.from(await response.arrayBuffer());
     await writeFile(outputPath, contents);
@@ -277,39 +250,6 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     throw error;
   }
 
-}
-
-async function findZvuchAudioUrl(query: string): Promise<string | null> {
-  const searchUrls = [
-    `https://wwv.zvuch.com/?s=${encodeURIComponent(query)}`,
-    `https://wwv.zvuch.com/search/${encodeURIComponent(query)}/`,
-  ];
-
-  for (const url of searchUrls) {
-    try {
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-        },
-      });
-      if (!response.ok) continue;
-      const html = await response.text();
-      const matches = [
-        ...html.matchAll(/https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|aac|wav|ogg)(?:\?[^\s"'<>]*)?/gi),
-        ...html.matchAll(/(?:file|src|href|data-src|data-url)\s*[:=]\s*["']?(https?:\/\/[^"'\s<>]+)(?:["']|\s|>)/gi),
-      ];
-      const candidate = matches
-        .map((match) => match[0].replace(/^['"]+|['"]+$/g, ""))
-        .find((value) => /zvuch\.com|mp3|m4a|aac|wav|ogg/i.test(value));
-      if (candidate) return candidate;
-    } catch {
-      // If the site blocks requests from the server, fall through to the next source.
-    }
-  }
-
-  return null;
 }
 
 function createB2Client(): S3Client | null {

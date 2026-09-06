@@ -10,12 +10,7 @@ import {
   withRetry,
 } from "./services/search.service.js";
 import { getAlternativeLinks } from "./services/links.service.js";
-import {
-  escapeHtml,
-  extractYouTubeId,
-  geniusSearchUrl,
-  isYouTubeUrl,
-} from "./utils/helpers.js";
+import { escapeHtml, geniusSearchUrl } from "./utils/helpers.js";
 import { getAlbumInfo } from "./services/itunes.service.js";
 import { findLyrics } from "./services/lyrics.service.js";
 import {
@@ -84,14 +79,10 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
   const albumLine = album?.albumName
     ? `\n💿 ${escapeHtml(album.albumName)}`
     : "";
-  const caption = `🎵 ${escapeHtml(track.title)} — ${escapeHtml(track.artist)}${albumLine}\n▶️ YouTube\n\n${track.watchUrl}`;
+  const caption = `🎵 ${escapeHtml(track.title)} — ${escapeHtml(track.artist)}${albumLine}\n▶️ Источник\n\n${track.watchUrl}`;
 
   const keyboard = new InlineKeyboard()
-    .url("▶️ YouTube", links.youtube)
-    .url("🎧 Song.link", links.songLink)
-    .row();
-  keyboard
-    .url("🎶 YouTube Music", links.youtubeMusic)
+    .url("🎧 Открыть источник", links.songLink)
     .url("🟢 Spotify", links.spotify)
     .row();
   keyboard
@@ -106,7 +97,6 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
 
   try {
     await ctx.reply("⏳ Скачиваю аудио, это может занять некоторое время...");
-    // Keep retries for transient yt-dlp/network failures.
     const audio = await withRetry(() => getAudioStream(track.videoId), {
       retries: 3,
       baseDelayMs: 1500,
@@ -165,7 +155,7 @@ bot.command("start", async (ctx) => {
     "👋 Привет!\nЯ помогу найти музыку 🎶, отправь мне что-то из этого:\n\n" +
       "🎵 Название песни или исполнителя\n🔤 Слова из песни\n🎙 Голосовое сообщение с музыкой\n" +
       "📹 Видео с музыкой\n🔊 Аудиозапись\n🎥 Видеосообщение с музыкой\n" +
-      "🔗 Ссылку на Instagram, TikTok, YouTube и другие сайты\n\n🕺 Наслаждайся!",
+      "🔗 Ссылку на сайт и музыкальный трек\n\n🕺 Наслаждайся!",
   );
 });
 
@@ -174,15 +164,10 @@ bot.command("legal", (ctx) => ctx.reply(LEGAL_TEXT));
 bot.on("message:text", async (ctx) => {
   const text = ctx.message.text.trim();
   if (!text || text.startsWith("/")) return;
-  const videoId = isYouTubeUrl(text) ? extractYouTubeId(text) : null;
-  let track: Track | null = null;
+
   try {
-    if (videoId) {
-      track = await getTrackByVideoId(videoId);
-    } else {
-      await showSearchResults(ctx, text);
-      return;
-    }
+    await showSearchResults(ctx, text);
+    return;
   } catch (error) {
     console.error("Music search failed:", error);
     await ctx.reply(
@@ -190,11 +175,6 @@ bot.on("message:text", async (ctx) => {
     );
     return;
   }
-  if (!track) {
-    await ctx.reply("🔍 Ничего не найдено. Попробуйте уточнить название.");
-    return;
-  }
-  await sendTrack(ctx, track);
 });
 
 bot.on("message:voice", async (ctx) => {

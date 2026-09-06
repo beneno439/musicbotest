@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Telegram music search bot built with grammY and YouTube search",
+  "description": "Telegram music search bot for direct audio sources and track recognition", 
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -13,10 +13,10 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1127.0",
     "@grammyjs/parse-mode": "github:grammyjs/parse-mode",
+    "cheerio": "^1.2.0",
     "dotenv": "^16.4.7",
     "grammy": "^1.35.0",
-    "nexara-sdk": "^0.4.0",
-    "youtube-search-api": "^1.2.0"
+    "nexara-sdk": "^0.4.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.5",

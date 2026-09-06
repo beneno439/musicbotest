@@ -1,7 +1,6 @@
 export interface AlternativeLinks {
   songLink: string;
-  youtube: string;
-  youtubeMusic: string;
+  source: string;
   spotify: string;
 }
 
@@ -13,16 +12,15 @@ interface SongLinkResponse {
 const cache = new Map<string, AlternativeLinks | null>();
 
 export async function getAlternativeLinks(
-  youtubeUrl: string,
+  sourceUrl: string,
   searchQuery: string,
 ): Promise<AlternativeLinks> {
-  const cached = cache.get(youtubeUrl);
+  const cached = cache.get(sourceUrl);
   if (cached) return cached;
 
   const fallback: AlternativeLinks = {
-    songLink: `https://song.link/y/${youtubeUrl.split("v=")[1] ?? ""}`,
-    youtube: youtubeUrl,
-    youtubeMusic: `https://music.youtube.com/search?q=${encodeURIComponent(searchQuery)}`,
+    songLink: `https://song.link/?url=${encodeURIComponent(sourceUrl)}`,
+    source: sourceUrl,
     spotify: `https://open.spotify.com/search/${encodeURIComponent(searchQuery)}`,
   };
 
@@ -33,7 +31,7 @@ export async function getAlternativeLinks(
 
   async function fetchLinks(withKey: boolean): Promise<SongLinkResponse> {
     const url = new URL("https://api.song.link/v1-alpha.1/links");
-    url.searchParams.set("url", youtubeUrl);
+    url.searchParams.set("url", sourceUrl);
     if (withKey && apiKey) url.searchParams.set("key", apiKey);
 
     const response = await fetch(url.toString(), {
@@ -68,15 +66,13 @@ export async function getAlternativeLinks(
     }
     const links: AlternativeLinks = {
       songLink: data.pageUrl ?? fallback.songLink,
-      youtube: data.linksByPlatform?.youtube?.url ?? youtubeUrl,
-      youtubeMusic:
-        data.linksByPlatform?.youtubeMusic?.url ?? fallback.youtubeMusic,
+      source: sourceUrl,
       spotify: data.linksByPlatform?.spotify?.url ?? fallback.spotify,
     };
-    cache.set(youtubeUrl, links);
+    cache.set(sourceUrl, links);
     return links;
-  } catch (error) {
-    cache.set(youtubeUrl, fallback);
+  } catch {
+    cache.set(sourceUrl, fallback);
     return fallback;
   }
 }
