@@ -11,6 +11,12 @@ import {
   youtubeWatchUrl,
 } from "../utils/helpers.js";
 import { Buffer } from "node:buffer";
+import {
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from "@aws-sdk/client-s3";
 
 export interface Track {
   videoId: string;
@@ -24,6 +30,7 @@ export interface Track {
 const cache = new Map<string, Track>();
 const apifyAudioCache = new Map<string, string>();
 const blockedVideoIds = new Set<string>();
+const b2Client = createB2Client();
 export function blockList(videoId: string): boolean {
   return blockedVideoIds.has(videoId);
 }
@@ -106,6 +113,14 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   const outputPath = join(directory, `${videoId}.mp3`);
 
   try {
+    const cacheKey = `audio/${videoId}.mp3`;
+    if (b2Client) {
+      const cached = await readFromB2(cacheKey, outputPath);
+      if (cached) {
+        return createAudioStream(outputPath, directory);
+      }
+    }
+
     let downloadUrl = apifyAudioCache.get(videoId);
     if (!downloadUrl) {
       downloadUrl = await createApifyDownload(
@@ -113,33 +128,91 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
       );
       apifyAudioCache.set(videoId, downloadUrl);
     }
-    let response = await fetch(downloadUrl);
-    if (!response.ok && apifyAudioCache.has(videoId)) {
-      apifyAudioCache.delete(videoId);
-      downloadUrl = await createApifyDownload(
-        track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
-      );
-      apifyAudioCache.set(videoId, downloadUrl);
-      response = await fetch(downloadUrl);
-    }
+    const response = await fetch(downloadUrl);
     if (!response.ok) {
       apifyAudioCache.delete(videoId);
       throw new Error(
         `Apify Storage file request returned HTTP ${response.status}.`,
       );
     }
-    await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
-    const audio = createReadStream(outputPath);
-    const cleanup = () => {
-      void rm(directory, { recursive: true, force: true });
-    };
-    audio.once("close", cleanup);
-    audio.once("error", cleanup);
-    return audio;
+    const contents = Buffer.from(await response.arrayBuffer());
+    await writeFile(outputPath, contents);
+    if (b2Client) {
+      await b2Client.send(
+        new PutObjectCommand({
+          Bucket: process.env.B2_BUCKET_NAME,
+          Key: cacheKey,
+          Body: contents,
+          ContentType: "audio/mpeg",
+        }),
+      );
+    }
+    return createAudioStream(outputPath, directory);
   } catch (error) {
     await rm(directory, { recursive: true, force: true });
     throw error;
   }
+
+}
+
+function createB2Client(): S3Client | null {
+  if (process.env.B2_CACHE_ENABLED !== "true") return null;
+  const endpoint = process.env.B2_ENDPOINT;
+  const region = process.env.B2_REGION;
+  const accessKeyId = process.env.B2_KEY_ID;
+  const secretAccessKey = process.env.B2_APPLICATION_KEY;
+  if (
+    !endpoint ||
+    !region ||
+    !accessKeyId ||
+    !secretAccessKey ||
+    !process.env.B2_BUCKET_NAME
+  ) {
+    console.warn("B2 cache disabled: incomplete B2 configuration.");
+    return null;
+  }
+  return new S3Client({
+    endpoint,
+    region,
+    forcePathStyle: true,
+    credentials: { accessKeyId, secretAccessKey },
+  });
+}
+
+async function readFromB2(key: string, outputPath: string): Promise<boolean> {
+  if (!b2Client) return false;
+  try {
+    await b2Client.send(
+      new HeadObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: key }),
+    );
+    const result = await b2Client.send(
+      new GetObjectCommand({ Bucket: process.env.B2_BUCKET_NAME, Key: key }),
+    );
+    if (!result.Body) return false;
+    await writeFile(
+      outputPath,
+      Buffer.from(await result.Body.transformToByteArray()),
+    );
+    return true;
+  } catch (error) {
+    const statusCode =
+      error && typeof error === "object" && "$metadata" in error
+        ? (error as { $metadata?: { httpStatusCode?: number } }).$metadata
+            ?.httpStatusCode
+        : undefined;
+    if (statusCode === 404) return false;
+    throw error;
+  }
+}
+
+function createAudioStream(outputPath: string, directory: string): Readable {
+  const audio = createReadStream(outputPath);
+  const cleanup = () => {
+    void rm(directory, { recursive: true, force: true });
+  };
+  audio.once("close", cleanup);
+  audio.once("error", cleanup);
+  return audio;
 }
 
 async function createApifyDownload(videoUrl: string): Promise<string> {
