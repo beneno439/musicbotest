@@ -62,9 +62,7 @@ async function sendTrack(ctx: Context, track: Track): Promise<void> {
     .row();
   keyboard
     .url("📝 Открыть текст", geniusSearchUrl(track.title, track.artist))
-    .text("📨 Отправить текст", `lyrics:${track.videoId}`)
-    .row()
-    .url("🔗 Текст в Genius", geniusSearchUrl(track.title, track.artist));
+    .text("📨 Отправить текст", `lyrics:${track.videoId}`);
 
   await ctx.replyWithPhoto(photo, {
     caption,
@@ -128,8 +126,8 @@ bot.callbackQuery(/^track:(.+)$/, async (ctx) => {
 bot.command("start", async (ctx) => {
   await ctx.reply(
     "👋 Привет!\nЯ помогу найти музыку 🎶, отправь мне что-то из этого:\n\n" +
-      "🎵 Название песни или исполнителя\n🔤 Слова из песни\n🎙 Голосовое сообщение с музыкой\n" +
-      "📹 Видео с музыкой\n🔊 Аудиозапись\n🎥 Видеосообщение с музыкой\n" +
+      "🎵 Название песни или исполнителя\n🔤 Слова из песни\n🎙 Голосовое сообщение с музыкой(не умеем)\n" +
+      "📹 Видео с музыкой (не умеем)\n🔊 Аудиозапись (не умеем)\n🎥 Видеосообщение с музыкой(не умеем)\n" +
       "🔗 Ссылку на Instagram, TikTok, YouTube и другие сайты\n\n🕺 Наслаждайся!",
   );
 });
