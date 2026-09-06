@@ -206,6 +206,9 @@ bot.on("message:voice", async (ctx) => {
         ? `📝 Распознанный текст:\n${text}`
         : "📝 Не удалось распознать голосовое сообщение.",
     );
+    if (text) {
+      await showSearchResults(ctx, text);
+    }
   } catch (error) {
     console.error("Nexara voice transcription failed:", error);
     await ctx.reply(
