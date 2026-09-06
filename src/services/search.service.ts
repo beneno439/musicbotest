@@ -11,6 +11,7 @@ import {
   normalizeQuery,
   youtubeWatchUrl,
 } from "../utils/helpers.js";
+import { Buffer } from "node:buffer";
 
 export interface Track {
   videoId: string;
@@ -110,12 +111,17 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
       "mp3",
       "stream",
     );
-    if ("error" in details || !details.download) {
+    const downloadUrl =
+      details.download ??
+      (details as { downloadUrl?: string; url?: string }).downloadUrl;
+    if ("error" in details || !downloadUrl) {
+      const apiError =
+        "error" in details && details.error ? ` ${details.error}` : "";
       throw new Error(
-        "YouTube downloader API did not return an audio download URL.",
+        `YouTube downloader API did not return an audio download URL.${apiError}`,
       );
     }
-    const response = await fetch(details.download);
+    const response = await fetch(downloadUrl);
     if (!response.ok) {
       throw new Error(
         `YouTube downloader API returned HTTP ${response.status}.`,
