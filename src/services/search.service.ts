@@ -4,7 +4,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import { getDownloadDetails } from "youtube-downloader-cc-api";
 import {
   canReadVideoInfo,
   getThumbnail,
@@ -106,25 +105,41 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
   const outputPath = join(directory, `${videoId}.mp3`);
 
   try {
-    const details = await getDownloadDetails(
+    const apiKey =
+      process.env.VIDEO_DOWNLOAD_API_KEY || process.env.AOU_KEY_VDA;
+    if (!apiKey) {
+      throw new Error("VIDEO_DOWNLOAD_API_KEY is not configured.");
+    }
+    const host = process.env.VIDEO_DOWNLOAD_API_HOST || "p.savenow.to";
+    const createUrl = new URL(`https://${host}/ajax/download.php`);
+    createUrl.searchParams.set(
+      "url",
       track?.downloadUrl || `https://www.youtube.com/watch?v=${videoId}`,
-      "mp3",
-      "stream",
     );
-    const downloadUrl =
-      details.download ??
-      (details as { downloadUrl?: string; url?: string }).downloadUrl;
-    if ("error" in details || !downloadUrl) {
-      const apiError =
-        "error" in details && details.error ? ` ${details.error}` : "";
+    createUrl.searchParams.set("format", "mp3");
+    createUrl.searchParams.set("apikey", apiKey);
+    createUrl.searchParams.set("add_info", "1");
+    createUrl.searchParams.set("audio_quality", "192");
+
+    const createResponse = await fetch(createUrl);
+    const createPayload = (await createResponse.json()) as {
+      success?: boolean;
+      id?: string;
+      error?: string;
+    };
+    if (!createResponse.ok || !createPayload.success || !createPayload.id) {
       throw new Error(
-        `YouTube downloader API did not return an audio download URL.${apiError}`,
+        `Video Download API rejected the job: ${
+          createPayload.error || `HTTP ${createResponse.status}`
+        }`,
       );
     }
+
+    const downloadUrl = await waitForDownload(host, createPayload.id);
     const response = await fetch(downloadUrl);
     if (!response.ok) {
       throw new Error(
-        `YouTube downloader API returned HTTP ${response.status}.`,
+        `Video Download API file request returned HTTP ${response.status}.`,
       );
     }
     await writeFile(outputPath, Buffer.from(await response.arrayBuffer()));
@@ -139,6 +154,34 @@ export async function getAudioStream(videoId: string): Promise<Readable> {
     await rm(directory, { recursive: true, force: true });
     throw error;
   }
+}
+
+async function waitForDownload(host: string, id: string): Promise<string> {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const progressUrl = new URL(`https://${host}/ajax/progress.php`);
+    progressUrl.searchParams.set("id", id);
+    const response = await fetch(progressUrl);
+    const payload = (await response.json()) as {
+      success?: number;
+      progress?: number;
+      download_url?: string;
+      text?: string;
+      message?: string;
+    };
+    if (!response.ok || payload.success === 0) {
+      throw new Error(
+        `Video Download API progress failed: ${
+          payload.message || payload.text || `HTTP ${response.status}`
+        }`,
+      );
+    }
+    if (payload.progress === 1000 && payload.download_url) {
+      return payload.download_url;
+    }
+    await sleep(2000);
+  }
+  throw new Error("Video Download API timed out while preparing the audio.");
 }
 
 /**
